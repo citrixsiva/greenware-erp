@@ -1,0 +1,188 @@
+#cloud-config
+# =============================================================================
+# Greenware ERP droplet — host preparation only.
+#
+# This installs Docker, Caddy (TLS) and basic hardening. It deliberately does
+# NOT clone the repository, write a .env or start the application: that would
+# mean putting a deploy key and a database password into droplet user-data,
+# which is readable from the droplet's metadata endpoint for the life of the
+# droplet. The application is deployed in a few explicit commands afterwards —
+# see docs/DEPLOYMENT.md.
+#
+# Rendered by Terraform's templatefile(): a single dollar-brace reference is a
+# template variable, and a doubled dollar-brace is passed through so it reaches
+# the host as a literal shell reference. Never write a bare dollar-brace for
+# anything that is not one of the template's own variables — templatefile()
+# fails on an unknown name.
+# =============================================================================
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - ca-certificates
+  - curl
+  - gnupg
+  - git
+  - ufw
+  - fail2ban
+  - unattended-upgrades
+  - debian-keyring
+  - debian-archive-keyring
+  - apt-transport-https
+
+groups:
+  - docker
+
+users:
+  - default
+  - name: deploy
+    gecos: Greenware ERP deploy account
+    shell: /bin/bash
+    groups: [docker, sudo]
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    lock_passwd: true
+    ssh_authorized_keys: []
+
+write_files:
+  # ---------------------------------------------------------------------------
+  # SSH hardening. Keys only, no root login.
+  # ---------------------------------------------------------------------------
+  - path: /etc/ssh/sshd_config.d/99-greenware.conf
+    permissions: "0644"
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      ChallengeResponseAuthentication no
+      X11Forwarding no
+      MaxAuthTries 4
+      ClientAliveInterval 300
+      ClientAliveCountMax 2
+
+  # ---------------------------------------------------------------------------
+  # Caddy terminates TLS on 443 and proxies to the web container on
+  # 127.0.0.1:${web_port}. That container serves the SPA and proxies /api to
+  # the api container, so the browser sees ONE origin — which is required,
+  # because web/src/lib/api.ts calls /api/v1/... relatively.
+  #
+  # Ports 8080 and 8081 are bound on the droplet but are not open in the cloud
+  # firewall, so Caddy is the only way in.
+  # ---------------------------------------------------------------------------
+  - path: /etc/caddy/Caddyfile
+    permissions: "0644"
+    content: |
+%{ if app_domain != "" ~}
+      {
+        email ${acme_email}
+      }
+
+      ${app_domain} {
+        encode zstd gzip
+        reverse_proxy 127.0.0.1:${web_port} {
+          header_up X-Forwarded-Proto {scheme}
+        }
+        header {
+          Strict-Transport-Security "max-age=31536000; includeSubDomains"
+          X-Content-Type-Options    "nosniff"
+          Referrer-Policy           "same-origin"
+          -Server
+        }
+        log {
+          output file /var/log/caddy/access.log {
+            roll_size 50MiB
+            roll_keep 10
+          }
+        }
+      }
+%{ else ~}
+      # No app_domain was set, so there is NO TLS and NO certificate. This
+      # serves plain HTTP on port 80 and is fit only for a first smoke test.
+      # Set app_domain and acme_email in terraform.tfvars, re-run Caddy's
+      # configuration, and reload before this host sees real data.
+      :80 {
+        encode zstd gzip
+        reverse_proxy 127.0.0.1:${web_port}
+      }
+%{ endif ~}
+
+  - path: /etc/apt/apt.conf.d/51greenware-unattended
+    permissions: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      Unattended-Upgrade::Automatic-Reboot "false";
+
+  - path: ${repo_dir}/README-FIRST.md
+    permissions: "0644"
+    content: |
+      # Greenware ERP — droplet
+
+      cloud-init installed Docker and Caddy and nothing else. To deploy:
+
+          cd ${repo_dir}
+          sudo git clone <repo-url> .
+          sudo cp .env.example .env
+          sudo $${EDITOR:-vi} .env       # POSTGRES_* unused here; set DATABASE_URL + JWT_SECRET
+          sudo docker compose up -d --build
+
+      This host uses MANAGED Postgres, so do not run the bundled `postgres`
+      service. Apply migrations against the managed cluster with:
+
+          sudo docker compose run --rm migrate
+
+      Full instructions, including which compose services to disable on this
+      host, are in docs/DEPLOYMENT.md in the repository.
+
+runcmd:
+  # --- Docker from Docker's own repository (Ubuntu's docker.io lags badly) ---
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - |
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list
+
+  # --- Caddy from Cloudsmith, the official distribution channel -------------
+  - curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+  - curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o /etc/apt/sources.list.d/caddy-stable.list
+
+  - apt-get update -y
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin caddy
+
+  # --- the deploy account gets the same keys the droplet was created with ---
+  - install -d -m 0700 -o deploy -g deploy /home/deploy/.ssh
+  - cp /root/.ssh/authorized_keys /home/deploy/.ssh/authorized_keys
+  - chown deploy:deploy /home/deploy/.ssh/authorized_keys
+  - chmod 0600 /home/deploy/.ssh/authorized_keys
+
+  # --- host firewall, behind the DigitalOcean cloud firewall ---------------
+  # Belt and braces: if the cloud firewall is ever detached, 8080/8081 stay shut.
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw --force enable
+
+  - install -d -m 0755 -o caddy -g caddy /var/log/caddy
+  - install -d -m 0755 -o deploy -g deploy ${repo_dir}
+
+  - systemctl enable --now docker
+  - systemctl enable --now fail2ban
+  - systemctl enable caddy
+  - systemctl restart caddy
+  - systemctl restart ssh
+
+  # Docker's default log driver keeps growing until the disk is full, which on a
+  # droplet also takes Postgres' client, Caddy and sshd down with it.
+  - |
+    cat > /etc/docker/daemon.json <<'JSON'
+    {
+      "log-driver": "json-file",
+      "log-opts": { "max-size": "20m", "max-file": "5" },
+      "live-restore": true
+    }
+    JSON
+  - systemctl restart docker
+
+final_message: "Greenware ERP droplet ready after $UPTIME seconds. Nothing is deployed yet — see /opt/greenware-erp/README-FIRST.md"

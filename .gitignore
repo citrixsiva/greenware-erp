@@ -1,0 +1,34 @@
+# --- secrets: never commit ---
+.env
+.env.*
+!.env.example
+tok
+*.pem
+*.key
+*.p12
+secrets/
+
+# --- dependencies & build output ---
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# --- runtime state ---
+storage/
+uploads/
+*.log
+pgdata/
+coverage/
+
+# --- terraform ---
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+!*.tfvars.example
+
+# --- editor / OS ---
+.DS_Store
+.idea/
+.vscode/

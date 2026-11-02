@@ -1,0 +1,48 @@
+# =============================================================================
+# Overlay for a host that uses DigitalOcean Managed Postgres instead of the
+# bundled `postgres` container — i.e. the droplet built by infra/terraform.
+#
+#   docker compose -f docker-compose.yml -f infra/compose.managed-db.yml \
+#     run --rm migrate
+#   docker compose -f docker-compose.yml -f infra/compose.managed-db.yml \
+#     up -d --build api web
+#
+# `up -d api web` names the services explicitly and the `depends_on` entries are
+# cleared below, so the local `postgres` service is never started. The `!reset`
+# tag needs Compose v2.24 or newer (`docker compose version`).
+#
+# DATABASE_URL comes from the host's .env and must be the MANAGED cluster URI.
+# Two different ones are correct in two different places:
+#   migrate -> the DIRECT doadmin URI (001_core.sql does CREATE EXTENSION and
+#              CREATE ROLE, and PgBouncer is the wrong place for DDL)
+#   api     -> the POOLED URI, if enable_connection_pool is true
+# Both come from `terraform output`.
+# =============================================================================
+
+services:
+  postgres:
+    # Kept in the file so `docker compose config` still resolves, but it has no
+    # dependents here and is never started by the commands above. If you ever
+    # run a bare `docker compose up` on this host, this profile keeps it out.
+    profiles: ["never-on-managed-db"]
+
+  migrate:
+    depends_on: !reset null
+    environment:
+      DATABASE_URL: ${DATABASE_URL_DIRECT:?set DATABASE_URL_DIRECT in .env — terraform output -raw database_url_direct}
+
+  api:
+    depends_on: !reset null
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env — terraform output -raw database_url_pooled}
+
+  seed:
+    depends_on: !reset null
+    environment:
+      DATABASE_URL: ${DATABASE_URL_DIRECT:?set DATABASE_URL_DIRECT in .env}
+
+volumes:
+  # The managed cluster holds the data; nothing writes to this volume on this
+  # host. Declared so the merged file stays valid.
+  pgdata:
+    name: greenware-erp-pgdata-unused

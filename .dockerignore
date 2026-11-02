@@ -1,0 +1,27 @@
+# Build context for every image in this repo is the REPO ROOT (npm workspaces),
+# so this file is what keeps the context small. Keep `db/migrations` and
+# `infra/nginx` in — the root and web images need them.
+
+.git
+.github
+node_modules
+*/node_modules
+**/node_modules
+api/dist
+web/dist
+storage
+*.log
+npm-debug.log*
+.env
+.env.*
+!.env.example
+docs
+ops
+tok
+**/.DS_Store
+**/*.tsbuildinfo
+infra/terraform/.terraform
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/*.tfvars
+!infra/terraform/*.tfvars.example

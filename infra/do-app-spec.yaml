@@ -1,0 +1,231 @@
+# =============================================================================
+# Greenware ERP — DigitalOcean App Platform spec
+#
+# This is the FAST path, not the recommended one. Read the trade-offs in
+# docs/DEPLOYMENT.md before choosing it: App Platform containers have an
+# EPHEMERAL filesystem, and api/src/modules/documents.ts writes generated
+# quotation and RFQ documents to local disk (DOCUMENT_STORE_DIR). Every deploy
+# and every restart loses them. The recommended path is
+# infra/terraform/ (droplet + managed Postgres), which gives those documents a
+# real disk.
+#
+# Creates NOTHING that touches existing Greenware production: its own app, its
+# own Postgres cluster, its own DigitalOcean project.
+#
+#   doctl apps spec validate --spec infra/do-app-spec.yaml
+#   doctl apps create        --spec infra/do-app-spec.yaml
+#   doctl apps update <app-id> --spec infra/do-app-spec.yaml
+#
+# Before applying, replace every REPLACE_ME. Secrets are NOT stored here —
+# set them with `doctl apps update --spec` after `doctl` has them from your
+# shell, or in the control panel under Settings > App-Level Environment
+# Variables, marked "Encrypt".
+# =============================================================================
+
+name: greenware-erp
+
+# fra = Frankfurt. App Platform region slugs have no trailing digit (the
+# Droplet/Database equivalent is fra1). DigitalOcean has no UAE region at all —
+# see the data-residency warning in docs/DEPLOYMENT.md, which is a blocker you
+# must decide on, not a detail.
+region: fra
+
+# Keeps everything this spec creates out of the default project, so it cannot be
+# confused with existing Greenware production resources.
+project_name: greenware-erp
+
+alerts:
+  - rule: DEPLOYMENT_FAILED
+  - rule: DEPLOYMENT_LIVE
+  - rule: DOMAIN_FAILED
+
+# -----------------------------------------------------------------------------
+# Managed Postgres 16.
+#
+# A dedicated cluster is NOT created by this spec — create it first (see
+# docs/DEPLOYMENT.md) and reference it here by cluster_name. Binding it adds
+# this app to the cluster's trusted sources automatically, so the cluster stays
+# closed to the public internet.
+#
+# `${erp-db.DATABASE_URL}` is resolved by App Platform at deploy time and
+# already carries `?sslmode=require`.
+# -----------------------------------------------------------------------------
+databases:
+  - name: erp-db
+    engine: PG
+    version: "16"
+    production: true
+    cluster_name: greenware-erp-pg
+
+# -----------------------------------------------------------------------------
+# Migrations run BEFORE the new API version takes traffic.
+#
+# PRE_DEPLOY is the only correct place for this: the migrations are not
+# idempotent, so running them from the API's own start-up would race between
+# instances. infra/scripts/apply-migrations.sh records what it applied in
+# public.schema_migrations and is safe to re-run on every deploy.
+#
+# The root Dockerfile is a psql-16 image, so the job needs no Node runtime.
+# -----------------------------------------------------------------------------
+jobs:
+  - name: migrate
+    kind: PRE_DEPLOY
+    dockerfile_path: Dockerfile
+    source_dir: /
+    github:
+      repo: REPLACE_ME_github_org/greenware-erp
+      branch: main
+      deploy_on_push: true
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${erp-db.DATABASE_URL}
+
+# -----------------------------------------------------------------------------
+services:
+  - name: api
+    dockerfile_path: api/Dockerfile
+    source_dir: /
+    github:
+      repo: REPLACE_ME_github_org/greenware-erp
+      branch: main
+      deploy_on_push: true
+
+    # Instance slugs are renamed by DigitalOcean from time to time. If this one
+    # is rejected, `doctl apps spec validate` names the valid set; basic-xs is
+    # 1 vCPU / 1 GB at the time of writing.
+    instance_count: 1
+    instance_size_slug: basic-xs
+
+    http_port: 8080
+
+    health_check:
+      # api/src/server.ts:53 — unauthenticated, no database access, so it
+      # reports "the process is up", NOT "the database is reachable".
+      http_path: /health
+      initial_delay_seconds: 20
+      period_seconds: 15
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 4
+
+    alerts:
+      - rule: CPU_UTILIZATION
+        operator: GREATER_THAN
+        value: 80
+        window: FIVE_MINUTE_PERIOD
+      - rule: MEM_UTILIZATION
+        operator: GREATER_THAN
+        value: 85
+        window: FIVE_MINUTE_PERIOD
+      - rule: RESTART_COUNT
+        operator: GREATER_THAN
+        value: 3
+        window: TEN_MINUTE_PERIOD
+
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${erp-db.DATABASE_URL}
+
+      # api/src/core/config.ts falls back to 'dev-only-secret-change-me' when
+      # this is unset. SECRET means App Platform stores it encrypted and never
+      # shows it again — set the real value out of band, not in this file.
+      - key: JWT_SECRET
+        scope: RUN_TIME
+        type: SECRET
+        value: REPLACE_ME_openssl_rand_hex_32
+
+      - key: JWT_TTL
+        scope: RUN_TIME
+        value: "8h"
+      - key: NODE_ENV
+        scope: RUN_AND_BUILD_TIME
+        value: production
+      - key: COMPANY_CODE
+        scope: RUN_TIME
+        value: GWT
+      # OD-18: the Dubai calendar governs every SLA clock, Trichy included.
+      - key: DEFAULT_CALENDAR
+        scope: RUN_TIME
+        value: Dubai
+      # OD-09: hard floor. Warn thresholds live in gw.margin_rules.
+      - key: MARGIN_FLOOR_PCT
+        scope: RUN_TIME
+        value: "3"
+
+      # EPHEMERAL. Generated documents written here do not survive a deploy or a
+      # restart, and are not shared between instances — which is also why
+      # instance_count must stay at 1 on this path.
+      - key: DOCUMENT_STORE_DIR
+        scope: RUN_TIME
+        value: /app/storage
+
+      - key: ENTRA_ENABLED
+        scope: RUN_TIME
+        value: "false"
+      - key: ENTRA_TENANT_ID
+        scope: RUN_TIME
+        value: ""
+      - key: ENTRA_CLIENT_ID
+        scope: RUN_TIME
+        value: ""
+
+# -----------------------------------------------------------------------------
+# The SPA. web/Dockerfile's `runtime` stage puts the built assets in
+# /usr/share/nginx/html; App Platform copies them out of the image and serves
+# them from its CDN, so the nginx in that image never runs here and its /api
+# proxy is unused — App Platform's own ingress rules below do that job.
+#
+# If your account's builder rejects dockerfile_path on a static site, swap to
+# the buildpack form (documented in docs/DEPLOYMENT.md):
+#     build_command: cd web && npm ci && npm run build
+#     output_dir: web/dist
+# -----------------------------------------------------------------------------
+static_sites:
+  - name: web
+    dockerfile_path: web/Dockerfile
+    source_dir: /
+    output_dir: /usr/share/nginx/html
+    # react-router owns client-side routing, so every unmatched path must return
+    # index.html rather than a 404.
+    catchall_document: index.html
+    github:
+      repo: REPLACE_ME_github_org/greenware-erp
+      branch: main
+      deploy_on_push: true
+
+# -----------------------------------------------------------------------------
+# One origin, two components.
+#
+# web/src/lib/api.ts calls `/api/v1/...` with a RELATIVE path and has no
+# base-URL setting, so the SPA and the API must answer on the same hostname.
+#
+# preserve_path_prefix: true is required. App Platform strips the matched prefix
+# by default, which would turn GET /api/v1/enquiries into GET /v1/enquiries and
+# produce a 404 from Fastify on every single request.
+# -----------------------------------------------------------------------------
+ingress:
+  rules:
+    - component:
+        name: api
+        preserve_path_prefix: true
+      match:
+        path:
+          prefix: /api
+    - component:
+        name: web
+      match:
+        path:
+          prefix: /
+
+# -----------------------------------------------------------------------------
+# Custom domain. Leave commented until the DNS zone is ready; App Platform
+# issues and renews the Let's Encrypt certificate itself.
+# -----------------------------------------------------------------------------
+# domains:
+#   - domain: erp.greenware.ae
+#     type: PRIMARY
+#     zone: greenware.ae

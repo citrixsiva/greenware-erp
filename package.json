@@ -1,0 +1,10 @@
+{
+  "name": "greenware-erp",
+  "private": true,
+  "workspaces": ["api", "web"],
+  "scripts": {
+    "dev": "npm -w api run dev",
+    "build": "npm -w api run build && npm -w web run build",
+    "test": "npm -w api run test"
+  }
+}

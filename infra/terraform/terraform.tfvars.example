@@ -1,0 +1,63 @@
+# =============================================================================
+# Copy to terraform.tfvars and edit.  terraform.tfvars is git-ignored.
+#
+#     cp terraform.tfvars.example terraform.tfvars
+#
+# NO SECRETS BELONG IN EITHER FILE. The DigitalOcean token comes from the
+# environment:
+#     export DIGITALOCEAN_TOKEN="dop_v1_..."
+# =============================================================================
+
+# -- Naming -------------------------------------------------------------------
+project_name = "greenware-erp"
+environment  = "prod"
+
+# -- Region -------------------------------------------------------------------
+# fra1 = Frankfurt. READ THE DATA-RESIDENCY SECTION of docs/DEPLOYMENT.md first:
+# DigitalOcean has no UAE region, so the recorded "UAE data must stay in the UAE"
+# decision cannot be met on this provider at all, whichever slug goes here.
+#
+#   fra1  Frankfurt  — default. EU jurisdiction, full feature parity.
+#   blr1  Bangalore  — lower latency to both Dubai and Trichy; puts UAE
+#                      commercial data under Indian jurisdiction.
+#   ams3  Amsterdam  — equivalent to fra1, marginally further.
+region = "fra1"
+
+# -- Droplet ------------------------------------------------------------------
+droplet_size  = "s-2vcpu-4gb"
+droplet_image = "ubuntu-24-04-x64"
+
+# Names of keys ALREADY in the DigitalOcean account (Settings > Security).
+# These are looked up, not created. Replace with your real key names.
+ssh_key_names = ["REPLACE_ME-key-name"]
+
+# Office / VPN egress ranges allowed to reach port 22. Narrow this.
+# ["0.0.0.0/0"] works but leaves SSH exposed to the internet.
+ssh_allowed_cidrs = ["REPLACE_ME/32"]
+
+# 20:00 UTC = midnight in Dubai.
+droplet_backup_hour = 20
+
+# -- Managed Postgres ---------------------------------------------------------
+db_size       = "db-s-1vcpu-2gb"
+db_node_count = 1 # 2 or 3 adds standby nodes — see the RTO section of docs/DEPLOYMENT.md
+db_name       = "greenware"
+
+# 22:00 UTC Sunday = 02:00 Monday in Dubai, 03:30 in Trichy.
+db_maintenance_day  = "sunday"
+db_maintenance_hour = "22:00:00"
+
+enable_connection_pool = true
+
+# -- TLS ----------------------------------------------------------------------
+# Leave app_domain empty for a first HTTP-only smoke test. Set both before this
+# host sees real data; the DNS A record must already point at the reserved IP.
+app_domain = ""
+acme_email = ""
+
+# -- Alerts -------------------------------------------------------------------
+# Empty = no alert policies are created at all.
+alert_emails = []
+
+# -- Extra tags ---------------------------------------------------------------
+extra_tags = []

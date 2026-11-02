@@ -1,0 +1,351 @@
+# =============================================================================
+# Greenware ERP — CI
+#
+# The test suite in api/src/__tests__ is NOT a unit suite. Every file imports
+# helpers.ts, which opens a pg pool AND calls a live HTTP API (`BASE`, default
+# http://127.0.0.1:8080). So "run the tests" means, in this order:
+#
+#   postgres 16  ->  three migrations  ->  seed --demo  ->  API process  ->  tests
+#
+# Each of those is a real prerequisite, verified by running the whole sequence:
+#   * without the migrations there is no gw schema;
+#   * without `--demo` there are no customers (seed.ts:51 gates them behind that
+#     flag) and 436 of 468 tests are cancelled in a before() hook with
+#     "Cannot read properties of null";
+#   * without the API process every HTTP assertion fails on a refused connection.
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "22"
+  PGHOST: 127.0.0.1
+  PGPORT: "5433"
+  PGUSER: postgres
+  PGPASSWORD: gwerp
+  PGDATABASE: greenware
+  # Matches the default in api/src/__tests__/env.ts, so the suite needs no
+  # per-step configuration.
+  DATABASE_URL: postgres://postgres:gwerp@127.0.0.1:5433/greenware
+
+jobs:
+  build-and-test:
+    name: typecheck · migrate · test · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: gwerp
+          POSTGRES_DB: greenware
+        ports:
+          # 5433 on the runner, matching the test suite's default.
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d greenware"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+          --health-start-period 10s
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+
+      # -----------------------------------------------------------------------
+      # The committed root package-lock.json covers ONLY the `api` workspace;
+      # `web` carries its own web/package-lock.json. With both workspaces
+      # declared at the root, `npm ci` aborts with
+      #   "npm error Missing: @esbuild/win32-x64@0.21.5 from lock file".
+      #
+      # Narrowing the workspace list in this ephemeral checkout keeps `npm ci`
+      # reproducible instead of falling back to a lock-mutating `npm install`.
+      # DELETE THIS STEP once the root lockfile is regenerated and committed
+      # (`npm install` at the repo root, commit package-lock.json).
+      # -----------------------------------------------------------------------
+      - name: Work around the out-of-sync root lockfile
+        run: |
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.workspaces=['api'];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
+          git --no-pager diff --stat package.json || true
+
+      - name: Install api dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci --no-audit --no-fund
+
+      # -----------------------------------------------------------------------
+      # Typecheck before anything expensive. `tsc --noEmit` on both workspaces.
+      # -----------------------------------------------------------------------
+      - name: Typecheck (api)
+        run: npx tsc -p api/tsconfig.json --noEmit
+
+      - name: Typecheck (web)
+        working-directory: web
+        run: npm run typecheck
+
+      # -----------------------------------------------------------------------
+      # Schema. infra/scripts/apply-migrations.sh applies 001, 002, 003 in
+      # filename order inside one transaction each, with ON_ERROR_STOP=1, and
+      # records them in public.schema_migrations.
+      # -----------------------------------------------------------------------
+      - name: Ensure psql 16 is available
+        run: |
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends postgresql-client
+          fi
+          psql --version
+
+      - name: Apply migrations
+        env:
+          MIGRATIONS_DIR: ${{ github.workspace }}/db/migrations
+        run: sh infra/scripts/apply-migrations.sh
+
+      - name: Verify the schema actually landed
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -t -A -c "
+            SELECT CASE WHEN count(*) >= 140 THEN 'ok: ' || count(*) || ' gw tables'
+                        ELSE 'FAIL: only ' || count(*) || ' gw tables' END
+              FROM pg_tables WHERE schemaname = 'gw';" | tee /tmp/schema-check
+          grep -q '^ok:' /tmp/schema-check
+
+      # -----------------------------------------------------------------------
+      # `--demo` is mandatory. See the header comment.
+      # -----------------------------------------------------------------------
+      - name: Seed reference and demo data
+        env:
+          SEED_PASSWORD: "Greenware#2026"
+          COMPANY_CODE: GWT
+          DEFAULT_CALENDAR: Dubai
+        run: npx tsx api/src/db/seed.ts --demo
+
+      - name: Start the API
+        env:
+          NODE_ENV: production
+          PORT: "8080"
+          HOST: 127.0.0.1
+          JWT_SECRET: ci-only-not-a-real-secret-0000000000000000
+          COMPANY_CODE: GWT
+          DEFAULT_CALENDAR: Dubai
+          MARGIN_FLOOR_PCT: "3"
+          DOCUMENT_STORE_DIR: ${{ runner.temp }}/document-store
+        run: |
+          mkdir -p "$DOCUMENT_STORE_DIR"
+          nohup npx tsx api/src/server.ts > "${{ runner.temp }}/api.log" 2>&1 &
+          echo $! > "${{ runner.temp }}/api.pid"
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null 2>&1; then
+              echo "API healthy after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::API did not become healthy within 60s"
+          cat "${{ runner.temp }}/api.log"
+          exit 1
+
+      # -----------------------------------------------------------------------
+      # The gate. No continue-on-error, no `|| true`: `tsx --test` exits
+      # non-zero on any failure and that fails the build.
+      # -----------------------------------------------------------------------
+      - name: Run the test suite
+        env:
+          API_URL: http://127.0.0.1:8080
+          SEED_PASSWORD: "Greenware#2026"
+        run: npx tsx --test api/src/__tests__/*.test.ts
+
+      - name: API log (on failure)
+        if: failure()
+        run: tail -n 300 "${{ runner.temp }}/api.log" || true
+
+      - name: Stop the API
+        if: always()
+        run: |
+          if [ -f "${{ runner.temp }}/api.pid" ]; then
+            kill "$(cat "${{ runner.temp }}/api.pid")" 2>/dev/null || true
+          fi
+
+      # -----------------------------------------------------------------------
+      # Production builds last: a green test run against a broken build is not
+      # a green build. `npm run build` at the root cannot be used here because
+      # it calls `npm -w web`, and web is no longer a workspace after the
+      # lockfile workaround above.
+      # -----------------------------------------------------------------------
+      - name: Build the API
+        run: npm -w api run build
+
+      - name: Build the web client
+        working-directory: web
+        run: npm run build
+
+      - name: Check the build output exists
+        run: |
+          test -f api/dist/server.js || { echo "::error::api/dist/server.js missing"; exit 1; }
+          test -f web/dist/index.html || { echo "::error::web/dist/index.html missing"; exit 1; }
+
+  # ===========================================================================
+  # Images and infrastructure files. Separate job so a Dockerfile mistake is
+  # reported on its own rather than hiding behind a test failure. Nothing is
+  # pushed to a registry and nothing is deployed.
+  # ===========================================================================
+  containers:
+    name: images · compose · terraform
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Validate docker-compose.yml
+        run: |
+          # compose interpolates and fails on a missing required variable, so a
+          # throwaway env file is needed for `config` to resolve at all.
+          cp .env.example .env
+          sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci-only/' .env
+          sed -i 's/^JWT_SECRET=.*/JWT_SECRET=ci-only-not-a-real-secret/' .env
+          docker compose config --quiet
+          docker compose config --services
+          rm -f .env
+
+      - name: Build the migration image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          load: true
+          tags: greenware-erp-migrate:ci
+          cache-from: type=gha,scope=migrate
+          cache-to: type=gha,mode=max,scope=migrate
+
+      - name: Build the API image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: api/Dockerfile
+          target: runtime
+          push: false
+          load: true
+          tags: greenware-erp-api:ci
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+      - name: Build the web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: web/Dockerfile
+          target: runtime
+          push: false
+          load: true
+          tags: greenware-erp-web:ci
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,mode=max,scope=web
+
+      - name: Assert the production images are what they claim
+        run: |
+          set -e
+          # Non-root.
+          test "$(docker run --rm --entrypoint id greenware-erp-api:ci -u)" != "0" \
+            || { echo "::error::api image runs as root"; exit 1; }
+          test "$(docker run --rm --entrypoint id greenware-erp-migrate:ci -u)" != "0" \
+            || { echo "::error::migration image runs as root"; exit 1; }
+          test "$(docker run --rm --entrypoint id greenware-erp-web:ci -u)" != "0" \
+            || { echo "::error::web image runs as root"; exit 1; }
+          # NODE_ENV=production.
+          docker run --rm --entrypoint printenv greenware-erp-api:ci NODE_ENV | grep -qx production \
+            || { echo "::error::api image is not NODE_ENV=production"; exit 1; }
+          # No dev dependencies in the final layer.
+          if docker run --rm --entrypoint sh greenware-erp-api:ci -c 'ls /app/node_modules' | grep -Eqx 'typescript|tsx'; then
+            echo "::error::dev dependencies present in the api runtime image"; exit 1
+          fi
+          # The migration image carries all three migrations and nothing else.
+          docker run --rm --entrypoint sh greenware-erp-migrate:ci -c 'ls /migrations' | sort | tee /tmp/m
+          diff <(printf '001_core.sql\n002_marketing.sql\n003_fixes.sql\n') /tmp/m
+
+      - name: Migration image dry-run against a throwaway Postgres
+        run: |
+          docker network create gwci
+          docker run -d --name gwpg --network gwci \
+            -e POSTGRES_PASSWORD=ci-only -e POSTGRES_DB=greenware postgres:16
+          docker run --rm --network gwci \
+            -e DATABASE_URL="postgres://postgres:ci-only@gwpg:5432/greenware" \
+            greenware-erp-migrate:ci
+          # Second run must be a no-op, not an error: the ledger is the proof.
+          docker run --rm --network gwci \
+            -e DATABASE_URL="postgres://postgres:ci-only@gwpg:5432/greenware" \
+            greenware-erp-migrate:ci | tee /tmp/second
+          grep -q '0 applied, 3 skipped' /tmp/second \
+            || { echo "::error::migrations are not idempotent"; exit 1; }
+          docker rm -f gwpg; docker network rm gwci
+
+      # -----------------------------------------------------------------------
+      # Terraform is checked for formatting and internal consistency only.
+      # `terraform validate` needs the digitalocean provider, which is
+      # downloaded from registry.terraform.io — it reaches no DigitalOcean API
+      # and reads no credentials, so nothing is created here.
+      # -----------------------------------------------------------------------
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      # NOTE: the .tf files were hand-aligned — no terraform binary was
+      # available where they were written (releases.hashicorp.com was blocked),
+      # so this check has never actually been run against them. If the first CI
+      # run fails here, it is cosmetic: run `terraform fmt -recursive` in
+      # infra/terraform and commit the result.
+      - name: terraform fmt
+        working-directory: infra/terraform
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform validate
+        working-directory: infra/terraform
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      - name: Check no secret slipped into a committed file
+        run: |
+          set -e
+          # terraform.tfvars and .env are git-ignored; prove they are not tracked.
+          if git ls-files --error-unmatch infra/terraform/terraform.tfvars >/dev/null 2>&1; then
+            echo "::error::infra/terraform/terraform.tfvars is tracked — it must never be committed"; exit 1
+          fi
+          if git ls-files --error-unmatch .env >/dev/null 2>&1; then
+            echo "::error::.env is tracked — it must never be committed"; exit 1
+          fi
+          if git grep -nE 'dop_v1_[A-Za-z0-9]{8}' -- . ':!.github/workflows/ci.yml'; then
+            echo "::error::what looks like a DigitalOcean token is committed"; exit 1
+          fi

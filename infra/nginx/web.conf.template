@@ -1,0 +1,90 @@
+# =============================================================================
+# Greenware ERP — web edge configuration (used by web/Dockerfile).
+#
+# WHY A PROXY IS NOT OPTIONAL: web/src/lib/api.ts calls `/api/v1/...` with a
+# RELATIVE path and has no base-URL setting. The browser must therefore reach
+# the API on the SAME ORIGIN as the SPA. Serving web/dist from a bucket and the
+# API from a different hostname does not work without changing the client.
+#
+# Rendered by the nginx image's entrypoint (20-envsubst-on-templates.sh), which
+# substitutes only names that exist in the environment. ${API_UPSTREAM} is set
+# in web/Dockerfile, so it always has a value; $uri / $host are left alone.
+# =============================================================================
+
+upstream greenware_api {
+    server ${API_UPSTREAM};
+    keepalive 16;
+}
+
+server {
+    # 8080, not 80: this image runs unprivileged and cannot bind a low port.
+    listen       8080;
+    listen       [::]:8080;
+    server_name  _;
+
+    root  /usr/share/nginx/html;
+    index index.html;
+
+    # The API enforces its own 10 MB bodyLimit (api/src/server.ts). Match it so
+    # a too-large upload is rejected here with the same ceiling.
+    client_max_body_size 10m;
+
+    server_tokens off;
+    add_header X-Content-Type-Options nosniff          always;
+    add_header X-Frame-Options        SAMEORIGIN       always;
+    add_header Referrer-Policy        same-origin      always;
+
+    gzip             on;
+    gzip_vary        on;
+    gzip_min_length  1024;
+    gzip_proxied     any;
+    gzip_types       text/plain text/css application/javascript application/json
+                     image/svg+xml application/manifest+json;
+
+    # ---- API -----------------------------------------------------------
+    location /api/ {
+        proxy_pass         http://greenware_api;
+        proxy_http_version 1.1;
+        proxy_set_header   Connection        "";
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+
+        # Document generation (api/src/modules/documents.ts) renders on request
+        # and can outrun the 60s default on a large quotation.
+        proxy_connect_timeout 10s;
+        proxy_send_timeout    120s;
+        proxy_read_timeout    120s;
+        proxy_buffering       off;
+    }
+
+    # Reachable so an external monitor can check the API through the edge.
+    location = /healthz-api {
+        proxy_pass         http://greenware_api/health;
+        proxy_http_version 1.1;
+        proxy_set_header   Connection "";
+        access_log         off;
+    }
+
+    # ---- this container's own liveness ---------------------------------
+    location = /healthz {
+        access_log off;
+        add_header Content-Type text/plain;
+        return 200 "ok\n";
+    }
+
+    # ---- static assets -------------------------------------------------
+    # Vite emits content-hashed filenames into /assets, so they are immutable.
+    location /assets/ {
+        expires    1y;
+        add_header Cache-Control "public, immutable";
+        try_files  $uri =404;
+    }
+
+    # SPA history fallback — react-router owns every other path.
+    location / {
+        add_header Cache-Control "no-cache";
+        try_files  $uri $uri/ /index.html;
+    }
+}

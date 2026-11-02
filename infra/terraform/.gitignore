@@ -1,0 +1,22 @@
+# Terraform state contains the doadmin password in cleartext. Never commit it.
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl.bak
+crash.log
+crash.*.log
+
+# Real variable values and anything secret.
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Saved plans embed resolved variable values, including secrets.
+*.plan
+tf.plan
+
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
