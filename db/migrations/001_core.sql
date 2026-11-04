@@ -12,9 +12,28 @@
 --   6. Money is numeric with an explicit currency; never float.
 -- =====================================================================
 
-CREATE EXTENSION IF NOT EXISTS "pgcrypto";
-CREATE EXTENSION IF NOT EXISTS "pg_trgm";
-CREATE EXTENSION IF NOT EXISTS "btree_gin";
+-- ---------------------------------------------------------------------
+-- EXTENSIONS — optional, not fatal.
+-- On a DigitalOcean App Platform *dev* database the bound user is not the
+-- database owner and CREATE EXTENSION is refused. None of these is load
+-- bearing: gen_random_uuid() is core since PostgreSQL 13 (pgcrypto is not
+-- used for anything else here), and the five trigram indexes below degrade
+-- to plain btree indexes when pg_trgm is absent. Install them as doadmin on
+-- a managed cluster to get prefix-free substring search back.
+-- ---------------------------------------------------------------------
+DO $ext$
+DECLARE
+  e text;
+BEGIN
+  FOREACH e IN ARRAY ARRAY['pgcrypto','pg_trgm','btree_gin'] LOOP
+    BEGIN
+      EXECUTE format('CREATE EXTENSION IF NOT EXISTS %I', e);
+    EXCEPTION WHEN insufficient_privilege OR undefined_file OR feature_not_supported THEN
+      RAISE WARNING 'extension % not installed (%) — continuing without it', e, SQLERRM;
+    END;
+  END LOOP;
+END
+$ext$;
 
 CREATE SCHEMA IF NOT EXISTS gw;
 SET search_path = gw, public;
@@ -1603,14 +1622,26 @@ SELECT po.id AS customer_po_id, po.po_ref, po.customer_id, po.enquiry_id,
 CREATE INDEX idx_enq_company_stage      ON enquiries (company_id, stage, received_at DESC);
 CREATE INDEX idx_enq_customer           ON enquiries (customer_id, received_at DESC);
 CREATE INDEX idx_enq_owner              ON enquiries (account_manager_id, stage);
-CREATE INDEX idx_enq_no_trgm            ON enquiries USING gin (enquiry_no gin_trgm_ops);
+DO $trgm$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm') THEN
+    EXECUTE 'CREATE INDEX idx_enq_no_trgm ON enquiries USING gin (enquiry_no gin_trgm_ops)';
+  ELSE
+    EXECUTE 'CREATE INDEX idx_enq_no_trgm ON enquiries (enquiry_no)';   -- no pg_trgm: exact/prefix only
+  END IF;
+END $trgm$;
 CREATE INDEX idx_proc_req_status        ON procurement_requests (status, raised_at);
 CREATE INDEX idx_proc_req_assignee      ON procurement_requests (assigned_to, status);
 CREATE INDEX idx_est_req_sbu            ON estimation_requests (sbu_id, status, raised_at);
 CREATE INDEX idx_sq_supplier            ON supplier_quotes (supplier_id, quote_date DESC);
 CREATE INDEX idx_cpp_part               ON cost_price_points (part_number, quoted_on DESC);
 CREATE INDEX idx_cpp_sku                ON cost_price_points (product_sku_id, quoted_on DESC);
-CREATE INDEX idx_cpp_part_trgm          ON cost_price_points USING gin (part_number gin_trgm_ops);
+DO $trgm$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm') THEN
+    EXECUTE 'CREATE INDEX idx_cpp_part_trgm ON cost_price_points USING gin (part_number gin_trgm_ops)';
+  ELSE
+    EXECUTE 'CREATE INDEX idx_cpp_part_trgm ON cost_price_points (part_number)';   -- no pg_trgm: exact/prefix only
+  END IF;
+END $trgm$;
 CREATE INDEX idx_spp_part               ON sell_price_points (part_number, quoted_on DESC);
 CREATE INDEX idx_spp_customer           ON sell_price_points (customer_id, quoted_on DESC);
 CREATE INDEX idx_qv_quotation           ON quotation_versions (quotation_id, version_no DESC);
@@ -1629,8 +1660,20 @@ CREATE INDEX idx_sla_state              ON sla_timers (state, timer_code) WHERE 
 CREATE INDEX idx_notif_user_unread      ON notifications (user_id, created_at DESC) WHERE read_at IS NULL;
 CREATE INDEX idx_doc_entity             ON documents (entity_type, entity_id);
 CREATE INDEX idx_docver_text            ON document_versions USING gin (to_tsvector('english', coalesce(extracted_text,'')));
-CREATE INDEX idx_cust_name_trgm         ON customers USING gin (name gin_trgm_ops);
-CREATE INDEX idx_sku_part_trgm          ON product_skus USING gin (part_number gin_trgm_ops);
+DO $trgm$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm') THEN
+    EXECUTE 'CREATE INDEX idx_cust_name_trgm ON customers USING gin (name gin_trgm_ops)';
+  ELSE
+    EXECUTE 'CREATE INDEX idx_cust_name_trgm ON customers (name)';   -- no pg_trgm: exact/prefix only
+  END IF;
+END $trgm$;
+DO $trgm$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm') THEN
+    EXECUTE 'CREATE INDEX idx_sku_part_trgm ON product_skus USING gin (part_number gin_trgm_ops)';
+  ELSE
+    EXECUTE 'CREATE INDEX idx_sku_part_trgm ON product_skus (part_number)';   -- no pg_trgm: exact/prefix only
+  END IF;
+END $trgm$;
 CREATE INDEX idx_contract_expiry        ON contracts (end_date) WHERE status IN ('Active','Expiring');
 CREATE INDEX idx_audit_entity           ON audit_log (entity_type, entity_id, occurred_at DESC);
 CREATE INDEX idx_audit_actor            ON audit_log (actor_user_id, occurred_at DESC);
@@ -1638,35 +1681,54 @@ CREATE INDEX idx_audit_actor            ON audit_log (actor_user_id, occurred_at
 -- =====================================================================
 -- PRIVILEGES — history is append-only (§12 §42, design rule 3)
 -- =====================================================================
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='gw_app')    THEN CREATE ROLE gw_app    LOGIN; END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='gw_report') THEN CREATE ROLE gw_report LOGIN; END IF;
-END $$;
+-- The two database roles, the append-only grants and the RLS policy are
+-- defence in depth: the API already enforces permission -> scope -> field
+-- masking in its own layer. On a DigitalOcean App Platform *dev* database the
+-- bound user has no CREATEROLE, so this whole block is best effort. If it is
+-- skipped the schema is complete and the application runs; re-run
+-- db/migrations/001_privileges_rls.sql as doadmin on a managed cluster to put
+-- the database-level layer back. The log line below says which happened.
+DO $priv$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gw_app') THEN
+    CREATE ROLE gw_app LOGIN;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gw_report') THEN
+    CREATE ROLE gw_report LOGIN;
+  END IF;
 
-GRANT USAGE ON SCHEMA gw TO gw_app, gw_report;
-GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA gw TO gw_app;
-GRANT SELECT ON ALL TABLES IN SCHEMA gw TO gw_report;
+  EXECUTE 'GRANT USAGE ON SCHEMA gw TO gw_app, gw_report';
+  EXECUTE 'GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA gw TO gw_app';
+  EXECUTE 'GRANT SELECT ON ALL TABLES IN SCHEMA gw TO gw_report';
 
--- No DELETE anywhere for the application role, and no UPDATE on history.
-REVOKE DELETE ON ALL TABLES IN SCHEMA gw FROM gw_app;
-REVOKE UPDATE ON cost_price_points, sell_price_points, audit_log,
-                 document_versions, stage_history, project_baselines,
-                 sow_versions FROM gw_app;
+  -- No DELETE anywhere for the application role, and no UPDATE on history.
+  EXECUTE 'REVOKE DELETE ON ALL TABLES IN SCHEMA gw FROM gw_app';
+  EXECUTE 'REVOKE UPDATE ON cost_price_points, sell_price_points, audit_log,
+                            document_versions, stage_history, project_baselines,
+                            sow_versions FROM gw_app';
 
--- Row-level security mirrors the RBAC scope rules as defence in depth.
-ALTER TABLE enquiries ENABLE ROW LEVEL SECURITY;
-CREATE POLICY enq_scope ON enquiries FOR SELECT TO gw_app
-USING (
-  current_setting('app.scope', true) = 'A'
-  OR (current_setting('app.scope', true) = 'O'
-      AND account_manager_id = current_setting('app.employee_id', true)::uuid)
-  OR (current_setting('app.scope', true) = 'S'
-      AND primary_sbu_id = current_setting('app.sbu_id', true)::uuid)
-  OR EXISTS (SELECT 1 FROM record_shares rs
-              WHERE rs.entity_type = 'enquiries' AND rs.entity_id = enquiries.id
-                AND rs.user_id = current_setting('app.user_id', true)::uuid
-                AND (rs.valid_to IS NULL OR rs.valid_to > now()))
-);
+  -- Row-level security mirrors the RBAC scope rules.
+  EXECUTE 'ALTER TABLE enquiries ENABLE ROW LEVEL SECURITY';
+  EXECUTE $pol$
+    CREATE POLICY enq_scope ON enquiries FOR SELECT TO gw_app
+    USING (
+      current_setting('app.scope', true) = 'A'
+      OR (current_setting('app.scope', true) = 'O'
+          AND account_manager_id = current_setting('app.employee_id', true)::uuid)
+      OR (current_setting('app.scope', true) = 'S'
+          AND primary_sbu_id = current_setting('app.sbu_id', true)::uuid)
+      OR EXISTS (SELECT 1 FROM record_shares rs
+                  WHERE rs.entity_type = 'enquiries' AND rs.entity_id = enquiries.id
+                    AND rs.user_id = current_setting('app.user_id', true)::uuid
+                    AND (rs.valid_to IS NULL OR rs.valid_to > now()))
+    )
+  $pol$;
+
+  RAISE NOTICE 'gw: database roles, append-only grants and RLS installed';
+EXCEPTION WHEN insufficient_privilege THEN
+  RAISE WARNING 'gw: skipped roles/grants/RLS — % (the API layer still enforces RBAC)', SQLERRM;
+END
+$priv$;
 
 -- ---------------------------------------------------------------------
 -- OD-01 DECIDED R3: Abdul is ONE person who sits in two SBUs — an engineer in

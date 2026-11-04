@@ -332,7 +332,13 @@ SELECT l.id, l.lead_no, l.company_name, l.contact_name, l.designation,
 CREATE INDEX idx_leads_status_score ON leads (status, score DESC, created_at DESC);
 CREATE INDEX idx_leads_owner        ON leads (owner_id, status);
 CREATE INDEX idx_leads_campaign     ON leads (campaign_id);
-CREATE INDEX idx_leads_company_trgm ON leads USING gin (company_name gin_trgm_ops);
+DO $trgm$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm') THEN
+    EXECUTE 'CREATE INDEX idx_leads_company_trgm ON leads USING gin (company_name gin_trgm_ops)';
+  ELSE
+    EXECUTE 'CREATE INDEX idx_leads_company_trgm ON leads (company_name)';   -- no pg_trgm: exact/prefix only
+  END IF;
+END $trgm$;
 CREATE INDEX idx_act_customer       ON activities (customer_id, occurred_at DESC);
 CREATE INDEX idx_act_entity         ON activities (entity_type, entity_id, occurred_at DESC);
 CREATE INDEX idx_act_lead           ON activities (lead_id, occurred_at DESC);
