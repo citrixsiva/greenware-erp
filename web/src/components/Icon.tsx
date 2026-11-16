@@ -7,6 +7,7 @@ const PATHS: Record<string, string> = {
   price: 'M2 12l3.5-4 3 2.5L14 4M10.5 4H14v3.5',
   approvals: 'M3 8.5l3 3L13 4.5',
   admin: 'M8 2l5 2v4c0 3-2.2 5-5 6-2.8-1-5-3-5-6V4z',
+  reports: 'M3 2.5h10v11H3zM5.5 10.5l2-2.5 1.5 1.5 2-3',
   search: 'M7 12a5 5 0 100-10 5 5 0 000 10zM14 14l-3.5-3.5',
   menu: 'M2.5 4h11M2.5 8h11M2.5 12h11',
   close: 'M3.5 3.5l9 9M12.5 3.5l-9 9',

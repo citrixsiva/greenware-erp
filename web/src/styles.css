@@ -525,3 +525,14 @@ td .input--cell.w-sm { min-width: 64px; max-width: 90px; }
 /* A table cell that acts as a link without being one. */
 .linklike { border: 0; background: none; padding: 0; font: inherit; color: var(--accent); cursor: pointer; text-align: left; }
 .linklike:hover { text-decoration: underline; }
+
+/* Reports: a segmented control that can hold five report names, and the
+   section headings that separate a report's main table from its detail
+   tables inside one flush panel. */
+.seg--wrap { flex-wrap: wrap; }
+.seg button:disabled { opacity: 0.45; cursor: not-allowed; }
+.seg button:disabled:hover { background: transparent; }
+.panel__body--flush > .kpis { border-left: 0; border-right: 0; border-top: 0; border-radius: 0; }
+.panel__body--flush > .notice { margin: var(--s3); }
+.subhead { display: flex; align-items: center; gap: var(--s2); padding: var(--s2) var(--s3); border-top: 1px solid var(--line); background: var(--surface-2); }
+.subhead h3 { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-2); }

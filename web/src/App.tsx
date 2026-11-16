@@ -21,6 +21,7 @@ const Campaigns = lazy(() => import('./pages/Campaigns'));
 const Customers = lazy(() => import('./pages/Customers'));
 const Suppliers = lazy(() => import('./pages/Suppliers'));
 const Products = lazy(() => import('./pages/Products'));
+const Reports = lazy(() => import('./pages/Reports'));
 const Approvals = lazy(() => import('./pages/Approvals'));
 const Admin = lazy(() => import('./pages/Admin'));
 
@@ -47,6 +48,7 @@ function Home() {
     ['quotations.view', '/quotations'],
     ['price_history.view', '/price-history'],
     ['customers.view', '/customers'],
+    ['reports.view', '/reports'],
     ['admin.view', '/admin'],
   ];
   const first = order.find(([k]) => user?.permissions[k] !== undefined);
@@ -84,6 +86,7 @@ export default function App() {
           <Route path="customers" element={<Gate perm="customers.view"><Customers /></Gate>} />
           <Route path="suppliers" element={<Gate perm="suppliers.view"><Suppliers /></Gate>} />
           <Route path="products" element={<Gate perm="products.view"><Products /></Gate>} />
+          <Route path="reports" element={<Gate perm="reports.view"><Reports /></Gate>} />
           <Route path="approvals" element={<Gate perm="quotations.approve"><Approvals /></Gate>} />
           <Route path="admin" element={<Gate perm="admin.view"><Admin /></Gate>} />
           <Route path="*" element={<EmptyState title="Page not found" hint="Use the navigation on the left." />} />

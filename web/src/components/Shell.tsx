@@ -41,6 +41,12 @@ const GROUPS: { label: string; items: NavItem[] }[] = [
       { to: '/products', label: 'Products', icon: 'quotation', perm: 'products.view' },
     ],
   },
+  {
+    label: 'Analysis',
+    items: [
+      { to: '/reports', label: 'Reports', icon: 'reports', perm: 'reports.view' },
+    ],
+  },
   { label: 'System', items: [{ to: '/admin', label: 'Admin', icon: 'admin', perm: 'admin.view' }] },
 ];
 
