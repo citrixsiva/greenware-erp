@@ -9,7 +9,8 @@
     "migrate": "tsx src/db/migrate.ts",
     "seed": "tsx src/db/seed.ts",
     "test": "tsx --test src/**/*.test.ts",
-    "fixtures": "tsx src/db/fixtures.ts"
+    "fixtures": "tsx src/db/fixtures.ts",
+    "rescore": "tsx src/db/rescore-leads.ts"
   },
   "dependencies": {
     "fastify": "^5.2.0",
