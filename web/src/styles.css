@@ -492,3 +492,9 @@ td .input--cell.w-sm { min-width: 64px; max-width: 90px; }
   .kv { grid-template-columns: 1fr; gap: 2px; }
   .kv dt { margin-top: 8px; }
 }
+
+/* The consent tick carries a sentence of explanation, so it needs to wrap as a
+   block rather than sit on one inline-flex line like the compact checkboxes. */
+.dlg__body .check { align-items: flex-start; gap: 9px; }
+.dlg__body .check input { margin-top: 2px; flex: none; }
+.dlg__body .check .hint { display: block; color: var(--ink-3); font-size: 12px; margin-top: 2px; }

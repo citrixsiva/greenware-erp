@@ -21,8 +21,14 @@ export interface Sbu { id: string; code: string; name: string }
 export interface BusinessType { id: string; code: string; name: string }
 export interface TaxCode { id: string; code: string; description: string; rate_pct: number }
 export interface LossReason { id: string; code: string; name: string }
+export interface Technology {
+  id: string; name: string; category_id: string; category_name: string;
+  sbu_id: string | null; sbu_code: string | null; sbu_name: string | null;
+}
+
 export interface Bootstrap {
   sbus: Sbu[];
+  technologies: Technology[];
   business_types: BusinessType[];
   tax_codes: TaxCode[];
   currencies: { code: string; name: string }[];
