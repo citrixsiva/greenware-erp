@@ -5,16 +5,33 @@ import { config } from './config.js';
 pg.types.setTypeParser(1700, (v) => (v === null ? null : Number(v)));
 pg.types.setTypeParser(20, (v) => (v === null ? null : Number(v)));
 
+/**
+ * DigitalOcean hands the app a URL ending in `?sslmode=require` and a
+ * certificate signed by a per-cluster CA that is in no public trust store.
+ *
+ * Passing an `ssl` object is not enough on its own: node-postgres now treats
+ * `sslmode=require` in the connection string as `verify-full`, that parsing
+ * wins over the object, and the connection dies with "self-signed certificate
+ * in certificate chain" — verified against this cluster. So the mode is
+ * removed from the URL and verification is configured explicitly, against the
+ * cluster's own CA. The common workaround, rejectUnauthorized:false, encrypts
+ * the connection while authenticating nothing, which is the half that matters.
+ *
+ * With no CA supplied — local Postgres, docker-compose — the URL is used as
+ * given and SSL is left alone.
+ */
+function connection(): pg.PoolConfig {
+  if (!config.databaseCaCert) return { connectionString: config.databaseUrl };
+  const url = new URL(config.databaseUrl);
+  url.searchParams.delete('sslmode');
+  return {
+    connectionString: url.toString(),
+    ssl: { ca: config.databaseCaCert, rejectUnauthorized: true },
+  };
+}
+
 export const pool = new pg.Pool({
-  connectionString: config.databaseUrl,
-  // Verify the server certificate against the cluster's own CA when one is
-  // supplied. Without this, `sslmode=require` against DigitalOcean Managed
-  // Postgres fails on an unknown issuer, and the usual "fix" of
-  // rejectUnauthorized:false encrypts the connection while authenticating
-  // nothing — which is the half that matters on a shared network.
-  ...(config.databaseCaCert
-    ? { ssl: { ca: config.databaseCaCert, rejectUnauthorized: true } }
-    : {}),
+  ...connection(),
   max: config.databasePoolMax,
   idleTimeoutMillis: 30_000,
 });
