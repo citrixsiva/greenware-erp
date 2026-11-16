@@ -7,6 +7,7 @@ import { require_, scopeFor, scopeSql, mask } from '../core/rbac.js';
 import { audit } from '../core/audit.js';
 import { AppError, badRequest, notFound, forbidden, gateBlocked, conflict } from '../core/errors.js';
 import { nextNumber } from '../core/numbering.js';
+import { rescoreLead } from '../core/lead-scoring.js';
 import { config } from '../core/config.js';
 import type { AuthCtx, Scope } from '../core/types.js';
 
@@ -1111,6 +1112,9 @@ export async function salesRoutes(app: FastifyInstance) {
          b.sourceDetail ?? null, b.technologyId ?? null, sbuId, b.estimatedValue ?? null, b.currency ?? null,
          ownerId, b.consentMarketing, ctx.userId]);
       await audit(c, ctx, { entityType: 'leads', entityId: ins.rows[0].id, action: 'create' });
+      // Score it before it is returned, so the Deal Desk never shows a new
+      // lead sitting at zero while the rules that apply to it already hold.
+      await rescoreLead(c, ctx, ins.rows[0].id);
       return fetchLeadRow(c, ins.rows[0].id);
     }));
     reply.code(201);

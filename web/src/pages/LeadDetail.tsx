@@ -15,6 +15,19 @@ import {
 const KINDS: ActivityKind[] = ['Call', 'Email', 'Meeting', 'Note', 'LinkedIn', 'WhatsApp', 'SiteVisit'];
 const WORKABLE: LeadStatus[] = ['New', 'Working', 'Nurturing', 'Recycled'];
 
+/**
+ * What an activity can evidence, for scoring. The labels are what the rules
+ * actually award for, so nobody has to guess which one means what; the points
+ * come from gw.scoring_rules and are shown so the choice is an informed one.
+ */
+const SIGNALS: { value: string; label: string }[] = [
+  { value: '', label: 'Nothing in particular' },
+  { value: 'email_replied', label: 'They replied to us' },
+  { value: 'webinar_attended', label: 'They attended a webinar' },
+  { value: 'form_submission', label: 'They submitted a form' },
+  { value: 'page_view', label: 'They visited a key page' },
+];
+
 /* ───────────────────────── log an activity ───────────────────────── */
 
 function LogActivity({ lead, onClose, onDone }: { lead: Lead; onClose: () => void; onDone: () => void }) {
@@ -23,6 +36,8 @@ function LogActivity({ lead, onClose, onDone }: { lead: Lead; onClose: () => voi
   const [body, setBody] = useState('');
   const [outcome, setOutcome] = useState('');
   const [mins, setMins] = useState('');
+  const [signal, setSignal] = useState('');
+  const [signalValue, setSignalValue] = useState('');
 
   return (
     <FormDialog
@@ -37,6 +52,8 @@ function LogActivity({ lead, onClose, onDone }: { lead: Lead; onClose: () => voi
           body: body.trim() || null,
           outcome: outcome.trim() || null,
           durationMins: mins ? Number(mins) : null,
+          behaviourEvent: signal || undefined,
+          behaviourValue: signal === 'page_view' && signalValue.trim() ? signalValue.trim() : undefined,
         });
         onDone();
       }}
@@ -61,6 +78,18 @@ function LogActivity({ lead, onClose, onDone }: { lead: Lead; onClose: () => voi
         <Field label="Duration (minutes)">
           {(p) => <input {...p} className="input" type="number" min={0} max={1440} value={mins} onChange={(e) => setMins(e.target.value)} />}
         </Field>
+        <Field label="Did this show buying interest?" hint="Only pick one if it is what actually happened — it adds to the lead's score, and an email we sent is not a reply.">
+          {(p) => (
+            <select {...p} className="select" value={signal} onChange={(e) => setSignal(e.target.value)}>
+              {SIGNALS.map((sg) => <option key={sg.value} value={sg.value}>{sg.label}</option>)}
+            </select>
+          )}
+        </Field>
+        {signal === 'page_view' ? (
+          <Field label="Which page" hint="The path, e.g. /pricing.">
+            {(p) => <input {...p} className="input" value={signalValue} onChange={(e) => setSignalValue(e.target.value)} maxLength={255} placeholder="/pricing" />}
+          </Field>
+        ) : null}
         {lead.status === 'New' ? (
           <Notice tone="info">Logging the first activity moves this lead to Working.</Notice>
         ) : null}

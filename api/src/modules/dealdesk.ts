@@ -22,6 +22,7 @@ import { require_, scopeFor, scopeSql } from '../core/rbac.js';
 import { audit } from '../core/audit.js';
 import { AppError, badRequest, notFound, conflict, gateBlocked } from '../core/errors.js';
 import type { AuthCtx, Scope } from '../core/types.js';
+import { BEHAVIOUR_EVENTS, rescoreLead, reportLeadEvent } from '../core/lead-scoring.js';
 
 /* ───────────────────────── constants ───────────────────────── */
 
@@ -40,7 +41,6 @@ const patchLeadBody = z
   .object({
     status: z.enum(['New', 'Working', 'Nurturing', 'Recycled']).optional(),
     ownerId: uuid.nullish(),
-    score: z.number().int().min(0).max(100).optional(),
     contactName: text().nullish(),
     designation: text().nullish(),
     email: z.string().trim().email().max(255).nullish(),
@@ -51,6 +51,10 @@ const patchLeadBody = z
     sourceDetail: z.string().trim().max(10_000).nullish(),
     consentMarketing: z.boolean().optional(),
   })
+  // Strict: `score` used to be settable here and is now derived from the
+  // scoring rules. A client still sending it should be told so, not have it
+  // quietly stripped and the patch reported as a success that changed nothing.
+  .strict()
   .refine((b) => Object.keys(b).length > 0, { message: 'Change at least one field' });
 
 const activityBody = z.object({
@@ -60,6 +64,10 @@ const activityBody = z.object({
   outcome: text().nullish(),
   durationMins: z.number().int().min(0).max(24 * 60).nullish(),
   occurredAt: z.string().datetime({ offset: true }).optional(),
+  // What this activity evidences, for scoring. Optional, and never guessed
+  // from the kind — see BEHAVIOUR_EVENTS.
+  behaviourEvent: z.enum(BEHAVIOUR_EVENTS).optional(),
+  behaviourValue: z.string().trim().max(255).optional(),
 });
 
 const summaryQuery = z.object({
@@ -233,19 +241,14 @@ export async function dealDeskRoutes(app: FastifyInstance) {
           // left in place as a record when it is withdrawn.
           if (b.consentMarketing) sets.push('consent_at = now()');
         }
-        if (b.score !== undefined) set('score', b.score);
-
         sets.push('updated_at = now()', 'row_version = row_version + 1');
         params.push(id);
         await c.query(`UPDATE gw.leads SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
 
-        // A manual score change is a scoring event like any other, so the trail
-        // explains the number even when a person set it by hand.
-        if (b.score !== undefined && b.score !== before.score) {
-          await c.query(
-            `INSERT INTO gw.lead_score_events (lead_id, delta, reason) VALUES ($1,$2,$3)`,
-            [id, b.score - Number(before.score ?? 0), `Set to ${b.score} by ${ctx.displayName}`]);
-        }
+        // Every editable field here is one a fit rule reads — an email
+        // captured, a seniority typed in, a value revised. Re-evaluate rather
+        // than leave the score describing the lead as it used to be.
+        await rescoreLead(c, ctx, id);
 
         for (const [field, value] of Object.entries(b)) {
           await audit(c, ctx, {
@@ -283,6 +286,13 @@ export async function dealDeskRoutes(app: FastifyInstance) {
         // rather than waiting for a second click.
         if (lead.status === 'New') {
           await c.query(`UPDATE gw.leads SET status = 'Working', updated_at = now() WHERE id = $1`, [id]);
+        }
+        if (b.behaviourEvent) {
+          await reportLeadEvent(c, id, b.behaviourEvent, {
+            value: b.behaviourValue,
+            // A page view is a state of interest, not an act worth stacking.
+            once: b.behaviourEvent === 'page_view',
+          });
         }
         await audit(c, ctx, { entityType: 'activities', entityId: ins.rows[0].id, action: 'create' });
         return { ...ins.rows[0], performed_by_name: ctx.displayName };

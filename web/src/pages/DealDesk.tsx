@@ -312,9 +312,15 @@ export default function DealDesk() {
               <div className="table-wrap">
                 <table className="t">
                   <thead>
+                    {/* Eight columns, not ten. At laptop width the ten-column
+                        version needed ~1110px in a ~1030px panel, so the status
+                        and age — the two you work the list by — sat off the
+                        right edge behind a sideways scroll. The lead number
+                        rides with the company and the technology with the
+                        campaign; nothing was dropped. */}
                     <tr>
-                      <th className="num">Score</th><th>Lead</th><th>Company</th><th>Contact</th>
-                      <th>Campaign</th><th>Technology</th><th>Owner</th>
+                      <th className="num">Score</th><th>Lead</th><th>Contact</th>
+                      <th>Source</th><th>Owner</th>
                       <th className="num">Value</th><th>Status</th><th className="num">Age</th>
                     </tr>
                   </thead>
@@ -322,17 +328,21 @@ export default function DealDesk() {
                     {list.rows.map((l) => (
                       <tr key={l.id}>
                         <td className="num"><ScoreChip score={l.score} /></td>
-                        <td><Link to={`/deal-desk/${l.id}`} className="id">{l.lead_no}</Link></td>
                         <td className="wrap">
-                          {l.company_name}
-                          {l.customer_id ? <span className="sub">Existing customer</span> : null}
+                          <Link to={`/deal-desk/${l.id}`} className="id">{l.company_name}</Link>
+                          <span className="sub">
+                            {l.lead_no}
+                            {l.customer_id ? ' · existing customer' : ''}
+                          </span>
                         </td>
                         <td className="wrap">
                           {l.contact_name ?? <span className="muted">No contact</span>}
                           {l.designation ? <span className="sub">{l.designation}</span> : null}
                         </td>
-                        <td className="wrap">{l.campaign_code ? <>{l.campaign_code}<span className="sub">{l.campaign_name}</span></> : <span className="muted">Direct</span>}</td>
-                        <td>{l.technology_name ?? <span className="muted">Unmatched</span>}</td>
+                        <td className="wrap">
+                          {l.campaign_code ? l.campaign_name : <span className="muted">Direct</span>}
+                          <span className="sub">{l.technology_name ?? 'Technology unmatched'}</span>
+                        </td>
                         <td>{l.owner_name ?? <span className="muted">Unassigned</span>}</td>
                         <td className="num">{l.estimated_value != null ? fmtMoney(l.estimated_value, l.currency, true) : <span className="muted">—</span>}</td>
                         <td><StatusPill value={l.status} /></td>
