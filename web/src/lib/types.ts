@@ -511,3 +511,68 @@ export interface CampaignRow {
   is_active: boolean;
   owner_name: string | null;
 }
+
+/* ───────────────────────── masters (customers, suppliers, products) ───────────────────────── */
+
+export interface Customer {
+  id: string;
+  company_id: string;
+  customer_code: string;
+  name: string;
+  industry: string | null;
+  location: string | null;
+  country: string | null;
+  customer_type: string | null;
+  account_manager_id: string | null;
+  account_manager_name: string | null;
+  payment_terms_days: number;
+  default_currency: string;
+  /** Masked unless the session holds the `credit` field group. Absent, not null. */
+  credit_limit?: number | null;
+  credit_currency?: string | null;
+  tax_registration: string | null;
+  is_active: boolean;
+  row_version: number;
+}
+
+export interface CustomerContact {
+  id: string;
+  customer_id: string;
+  full_name: string;
+  designation: string | null;
+  email: string | null;
+  phone: string | null;
+  is_primary: boolean;
+  is_active: boolean;
+}
+
+export interface CustomerDetail extends Customer {
+  contacts: CustomerContact[];
+}
+
+export interface SupplierRow {
+  id: string;
+  supplier_code: string;
+  name: string;
+  country: string | null;
+  default_currency: string;
+  /** Masked unless the session holds `supplier_terms`. */
+  payment_terms_days?: number | null;
+  credit_limit?: number | null;
+  rating: number | null;
+  is_active: boolean;
+  row_version: number;
+}
+
+export interface ProductSku {
+  id: string;
+  product_id: string;
+  product_name: string;
+  part_number: string;
+  description: string | null;
+  uom: string;
+  list_price: number | null;
+  list_currency: string | null;
+  manufacturer_name?: string | null;
+  category_name?: string | null;
+}

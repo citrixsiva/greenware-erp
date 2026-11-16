@@ -1,9 +1,13 @@
 import { useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
+import { useCan } from '../lib/auth';
 import { fmtDate, fmtMoney, fmtPct, isNum } from '../lib/format';
 import { usePagedList } from '../lib/hooks';
 import { STAGES, type EnquiryRow } from '../lib/types';
-import { Chip, EmptyState, ErrorState, LoadingState, MoreButton, PageHead, Panel, StatusPill } from '../components/ui';
+import { NewEnquiry } from '../components/NewEnquiry';
+import { useToast } from '../components/Toast';
+import { Chip, EmptyState, ErrorState, LoadingState, MoreButton, PageHead, Panel, PlusIcon, StatusPill } from '../components/ui';
 
 export default function Enquiries() {
   const [sp, setSp] = useSearchParams();
@@ -11,6 +15,11 @@ export default function Enquiries() {
   const stage = sp.get('stage') ?? '';
   const [text, setText] = useState(q);
   useEffect(() => setText(q), [q]);
+  const nav = useNavigate();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const canCreate = useCan('enquiries.create');
+  const [creating, setCreating] = useState(false);
 
   const list = usePagedList<EnquiryRow>(['enquiries'], '/enquiries', { q: q || undefined, stage: stage || undefined });
   const set = (k: string, v: string) => {
@@ -24,7 +33,15 @@ export default function Enquiries() {
 
   return (
     <>
-      <PageHead title="Enquiries" sub="Newest first. Open one to see its whole chain: procurement, estimation, quotations, follow-ups." />
+      <PageHead
+        title="Enquiries"
+        sub="Newest first. Open one to see its whole chain: procurement, estimation, quotations, follow-ups."
+        actions={canCreate ? (
+          <button type="button" className="btn btn--primary" onClick={() => setCreating(true)}>
+            <PlusIcon /> New enquiry
+          </button>
+        ) : null}
+      />
       <form
         className="filters"
         onSubmit={(e) => {
@@ -48,7 +65,13 @@ export default function Enquiries() {
 
       <Panel title="Enquiries" count={list.isPending ? '' : `${list.rows.length}${list.hasMore ? '+' : ''}`} flush>
         {list.isPending ? <LoadingState /> : list.isError ? <ErrorState error={list.error} onRetry={() => void list.refetch()} /> : list.rows.length === 0 ? (
-          <EmptyState title={q || stage ? 'No enquiries match' : 'No enquiries yet'} hint={q || stage ? 'Clear the search or the stage filter.' : 'Enquiries you can see will appear here.'} />
+          <EmptyState
+            title={q || stage ? 'No enquiries match' : 'No enquiries yet'}
+            hint={q || stage ? 'Clear the search or the stage filter.' : 'Create one, or qualify a lead on the Deal Desk.'}
+            action={canCreate && !q && !stage
+              ? <button type="button" className="btn btn--primary" onClick={() => setCreating(true)}><PlusIcon /> New enquiry</button>
+              : undefined}
+          />
         ) : (
           <>
             <div className="table-wrap">
@@ -84,6 +107,18 @@ export default function Enquiries() {
           </>
         )}
       </Panel>
+
+      {creating ? (
+        <NewEnquiry
+          onClose={() => setCreating(false)}
+          onDone={(id, no) => {
+            toast.push('ok', `${no} created.`);
+            void qc.invalidateQueries({ queryKey: ['enquiries'] });
+            void qc.invalidateQueries({ queryKey: ['board'] });
+            nav(`/enquiries/${id}`);
+          }}
+        />
+      ) : null}
     </>
   );
 }

@@ -33,6 +33,14 @@ const GROUPS: { label: string; items: NavItem[] }[] = [
       { to: '/price-history', label: 'Price history', icon: 'price', perm: 'price_history.view' },
     ],
   },
+  {
+    label: 'Master data',
+    items: [
+      { to: '/customers', label: 'Customers', icon: 'enquiries', perm: 'customers.view' },
+      { to: '/suppliers', label: 'Suppliers', icon: 'procurement', perm: 'suppliers.view' },
+      { to: '/products', label: 'Products', icon: 'quotation', perm: 'products.view' },
+    ],
+  },
   { label: 'System', items: [{ to: '/admin', label: 'Admin', icon: 'admin', perm: 'admin.view' }] },
 ];
 

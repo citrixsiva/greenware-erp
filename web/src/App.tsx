@@ -18,6 +18,9 @@ const PriceHistory = lazy(() => import('./pages/PriceHistory'));
 const DealDesk = lazy(() => import('./pages/DealDesk'));
 const LeadDetail = lazy(() => import('./pages/LeadDetail'));
 const Campaigns = lazy(() => import('./pages/Campaigns'));
+const Customers = lazy(() => import('./pages/Customers'));
+const Suppliers = lazy(() => import('./pages/Suppliers'));
+const Products = lazy(() => import('./pages/Products'));
 const Approvals = lazy(() => import('./pages/Approvals'));
 const Admin = lazy(() => import('./pages/Admin'));
 
@@ -43,6 +46,7 @@ function Home() {
     ['technical_estimations.view', '/estimation'],
     ['quotations.view', '/quotations'],
     ['price_history.view', '/price-history'],
+    ['customers.view', '/customers'],
     ['admin.view', '/admin'],
   ];
   const first = order.find(([k]) => user?.permissions[k] !== undefined);
@@ -77,6 +81,9 @@ export default function App() {
           <Route path="deal-desk" element={<Gate perm="leads.view"><DealDesk /></Gate>} />
           <Route path="deal-desk/:id" element={<Gate perm="leads.view"><LeadDetail /></Gate>} />
           <Route path="campaigns" element={<Gate perm="campaigns.view"><Campaigns /></Gate>} />
+          <Route path="customers" element={<Gate perm="customers.view"><Customers /></Gate>} />
+          <Route path="suppliers" element={<Gate perm="suppliers.view"><Suppliers /></Gate>} />
+          <Route path="products" element={<Gate perm="products.view"><Products /></Gate>} />
           <Route path="approvals" element={<Gate perm="quotations.approve"><Approvals /></Gate>} />
           <Route path="admin" element={<Gate perm="admin.view"><Admin /></Gate>} />
           <Route path="*" element={<EmptyState title="Page not found" hint="Use the navigation on the left." />} />
