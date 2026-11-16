@@ -215,6 +215,42 @@ const campaignQuery = z.object({
   q: z.string().trim().min(1).max(100).optional(),
 });
 
+// The channel is free text in the schema (varchar(32)) but only these six are
+// meaningful to the attribution view, so the API is the place that holds the
+// line — a typo'd "E-mail" would quietly become a seventh channel nobody can
+// report on.
+const CAMPAIGN_CHANNELS = ['Email', 'Webinar', 'Event', 'Digital', 'Content', 'Outbound'] as const;
+
+const campaignCreate = z.object({
+  campaignCode: z.string().trim().min(1).max(24).optional(),
+  name: text(255),
+  channel: z.enum(CAMPAIGN_CHANNELS),
+  ownerId: uuid.nullish(),
+  technologyCategoryId: uuid.nullish(),
+  startDate: isoDate,
+  endDate: isoDate.nullish(),
+  budget: money.nullish(),
+  currency: ccy.optional(),
+  targetLeads: z.number().int().positive().max(1_000_000).nullish(),
+// Strict on purpose. `spend` is the one field a create must not carry, and a
+// non-strict schema would drop it silently — the caller would get a 201 and
+// believe the spend was recorded. Say no out loud instead.
+}).strict();
+
+const campaignPatch = z.object({
+  name: text(255).optional(),
+  channel: z.enum(CAMPAIGN_CHANNELS).optional(),
+  ownerId: uuid.nullish(),
+  technologyCategoryId: uuid.nullish(),
+  startDate: isoDate.optional(),
+  endDate: isoDate.nullish(),
+  budget: money.nullish(),
+  spend: money.optional(),
+  currency: ccy.optional(),
+  targetLeads: z.number().int().positive().max(1_000_000).nullish(),
+  isActive: z.boolean().optional(),
+});
+
 /* ───────────────────────── small helpers ───────────────────────── */
 
 function parse<S extends z.ZodTypeAny>(schema: S, data: unknown): z.infer<S> {
@@ -1229,5 +1265,104 @@ export async function salesRoutes(app: FastifyInstance) {
         WHERE ${w.join(' AND ')}
         ORDER BY c.start_date DESC, c.campaign_code`, params);
     return { data: rows, nextCursor: null };
+  });
+
+  /**
+   * Campaigns are created here rather than seeded, because marketing starts a
+   * new one every few weeks and nobody is going to raise a migration for it.
+   *
+   * There is no record scope on a campaign: a campaign belongs to the company,
+   * not to the person who happened to create it, and the whole point of the
+   * attribution view is that anyone who can see campaigns can compare them.
+   * `campaigns.create` is therefore the only gate.
+   *
+   * Spend is deliberately NOT settable here. It is the denominator of
+   * cost_per_qualified_lead and return_multiple, so letting it be typed in
+   * alongside the budget on a create form invites someone to "fix" the ROI by
+   * editing the number the ROI is measured against. It is moved by PATCH, on
+   * its own, where the change is audited as what it is.
+   */
+  app.post('/api/v1/campaigns', async (req, reply) => {
+    const ctx = req.auth;
+    require_(ctx, 'campaigns.create');
+    const b = parse(campaignCreate, req.body);
+    if (b.endDate && b.endDate < b.startDate) {
+      throw badRequest('bad_dates', 'The campaign cannot end before it starts.');
+    }
+
+    const row = await guard(() => tx(txCtx(ctx, 'A'), async (c) => {
+      if (b.ownerId) {
+        const ok = await c.query(`SELECT 1 FROM gw.employees WHERE id = $1 AND is_active`, [b.ownerId]);
+        if (!ok.rows.length) throw badRequest('unknown_owner', 'That owner is not an active employee.');
+      }
+      if (b.technologyCategoryId) {
+        const ok = await c.query(`SELECT 1 FROM gw.technology_categories WHERE id = $1 AND is_active`, [b.technologyCategoryId]);
+        if (!ok.rows.length) throw badRequest('unknown_technology', 'That technology category does not exist.');
+      }
+      const code = b.campaignCode ?? await nextNumber(c, 'campaign', null, 'CMP', 4);
+      const res = await c.query(
+        `INSERT INTO gw.campaigns
+           (campaign_code, name, channel, owner_id, technology_category_id,
+            start_date, end_date, budget, currency, target_leads)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9,'AED'),$10)
+         RETURNING *`,
+        [code, b.name, b.channel, b.ownerId ?? ctx.employeeId ?? null, b.technologyCategoryId ?? null,
+          b.startDate, b.endDate ?? null, b.budget ?? null, b.currency ?? null, b.targetLeads ?? null]);
+      const created = res.rows[0] as Row;
+      await audit(c, ctx, { entityType: 'campaigns', entityId: String(created.id), action: 'create' });
+      return created;
+    }));
+    reply.code(201);
+    return { data: row };
+  });
+
+  app.patch('/api/v1/campaigns/:id', async (req) => {
+    const ctx = req.auth;
+    require_(ctx, 'campaigns.edit');
+    const { id } = parse(idParam, req.params);
+    const b = parse(campaignPatch, req.body);
+    if (Object.keys(b).length === 0) throw badRequest('nothing_to_change', 'Send at least one field to change.');
+
+    const row = await guard(() => tx(txCtx(ctx, 'A'), async (c) => {
+      const before = (await c.query(`SELECT * FROM gw.campaigns WHERE id = $1`, [id])).rows[0] as Row | undefined;
+      if (!before) throw notFound('That campaign no longer exists.');
+
+      const start = b.startDate ?? String(before.start_date).slice(0, 10);
+      const end = b.endDate !== undefined ? b.endDate : (before.end_date ? String(before.end_date).slice(0, 10) : null);
+      if (end && end < start) throw badRequest('bad_dates', 'The campaign cannot end before it starts.');
+
+      const sets: string[] = [];
+      const params: any[] = [];
+      const set = (col: string, v: unknown) => { params.push(v); sets.push(`${col} = $${params.length}`); };
+      if (b.name !== undefined) set('name', b.name);
+      if (b.channel !== undefined) set('channel', b.channel);
+      if (b.ownerId !== undefined) set('owner_id', b.ownerId);
+      if (b.technologyCategoryId !== undefined) set('technology_category_id', b.technologyCategoryId);
+      if (b.startDate !== undefined) set('start_date', b.startDate);
+      if (b.endDate !== undefined) set('end_date', b.endDate);
+      if (b.budget !== undefined) set('budget', b.budget);
+      if (b.spend !== undefined) set('spend', b.spend);
+      if (b.currency !== undefined) set('currency', b.currency);
+      if (b.targetLeads !== undefined) set('target_leads', b.targetLeads);
+      if (b.isActive !== undefined) set('is_active', b.isActive);
+
+      params.push(id);
+      const res = await c.query(
+        `UPDATE gw.campaigns SET ${sets.join(', ')} WHERE id = $${params.length} RETURNING *`, params);
+      const after = res.rows[0] as Row;
+      // Spend moves the ROI the whole screen is built on, so it is recorded as
+      // a field change with its old value, not just "campaign updated".
+      if (b.spend !== undefined) {
+        await audit(c, ctx, {
+          entityType: 'campaigns', entityId: id, action: 'update',
+          field: 'spend', oldValue: before.spend, newValue: b.spend,
+          reason: 'Campaign spend adjusted',
+        });
+      } else {
+        await audit(c, ctx, { entityType: 'campaigns', entityId: id, action: 'update' });
+      }
+      return after;
+    }));
+    return { data: row };
   });
 }

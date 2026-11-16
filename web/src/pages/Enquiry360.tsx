@@ -5,13 +5,15 @@ import { api, errorMessage, type One, type Page, UserError } from '../lib/api';
 import { useCan } from '../lib/auth';
 import { dubaiToday, fmtDate, fmtDateTime, fmtDec, fmtMoney, fmtPct, isNum } from '../lib/format';
 import { useBootstrap } from '../lib/hooks';
-import type { EnquiryDetail, EstRequest, ProcRequest, QuotationDetail, QuoteVersionSummary } from '../lib/types';
+import type { EnquiryDetail, EnquiryLine, EstRequest, ProcRequest, QuotationDetail, QuoteVersionSummary } from '../lib/types';
 import { FormDialog, MessageDialog } from '../components/Dialog';
 import { StageDialog } from '../components/StageDialog';
 import { useToast } from '../components/Toast';
 import { Chip, DataView, EmptyState, Field, Kpi, PageHead, Panel, PlusIcon, SlaPill, StatusPill, UrgencyChip } from '../components/ui';
 
-type Dlg = null | 'proc' | 'est' | 'follow' | 'stage';
+type Dlg =
+  | null | 'proc' | 'est' | 'follow' | 'stage' | 'competitor'
+  | { kind: 'line'; line: EnquiryLine | null };
 const ALL_PROC = 'Raised,Assigned,Sourcing,AwaitingSupplier,Responded,Cancelled';
 const ALL_EST = 'Raised,Assigned,InReview,ClarificationNeeded,Submitted,Cancelled';
 
@@ -109,6 +111,129 @@ function RaiseEstimation({ enq, onClose, onDone }: { enq: EnquiryDetail; onClose
   );
 }
 
+
+/**
+ * One line of an enquiry. The same form adds and edits, because the fields are
+ * identical and a separate read-only view would only be somewhere else to go
+ * wrong. The technology drives the SBU — leaving it unset is normal early on,
+ * when the customer has said what they want but not yet what it runs on.
+ */
+function LineForm({ enq, line, onClose, onDone }: {
+  enq: EnquiryDetail; line: EnquiryLine | null; onClose: () => void; onDone: (msg: string) => void;
+}) {
+  const boot = useBootstrap();
+  const [description, setDescription] = useState(line?.description ?? '');
+  const [quantity, setQuantity] = useState(line ? String(line.quantity) : '1');
+  const [technologyId, setTechnologyId] = useState(line?.technology_id ?? '');
+  const [sbuId, setSbuId] = useState(line?.sbu_id ?? '');
+
+  const qty = Number(quantity);
+  const badQty = quantity !== '' && (!Number.isFinite(qty) || qty <= 0);
+
+  return (
+    <FormDialog
+      title={line ? `Line ${line.line_no} on ${enq.enquiry_no}` : `New line on ${enq.enquiry_no}`}
+      submitLabel={line ? 'Save line' : 'Add line'}
+      onClose={onClose}
+      disabled={!description.trim() || badQty || quantity === ''}
+      onSubmit={async () => {
+        const body = {
+          description: description.trim(),
+          quantity: qty,
+          technologyId: technologyId || null,
+          sbuId: sbuId || null,
+        };
+        if (line) {
+          await api.patch(`/enquiry-lines/${line.id}`, body);
+          onDone(`Line ${line.line_no} updated.`);
+        } else {
+          await api.post(`/enquiries/${enq.id}/lines`, body);
+          onDone('Line added.');
+        }
+      }}
+    >
+      <Field label="Description" required hint="What the customer asked for, in their words where possible.">
+        {(p) => <textarea {...p} className="textarea" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={2000} autoFocus />}
+      </Field>
+      <div className="form-grid">
+        <Field label="Quantity" required error={badQty ? 'Quantity must be greater than zero.' : null}>
+          {(p) => <input {...p} className="input" type="number" min={0.01} step="any" value={quantity} onChange={(e) => setQuantity(e.target.value)} />}
+        </Field>
+        <Field label="Technology" hint="Sets the SBU unless you override it below.">
+          {(p) => (
+            <select {...p} className="select" value={technologyId} onChange={(e) => setTechnologyId(e.target.value)}>
+              <option value="">Not decided yet</option>
+              {(boot.data?.technologies ?? []).map((t) => (
+                <option key={t.id} value={t.id}>{t.category_name ? `${t.category_name} · ${t.name}` : t.name}</option>
+              ))}
+            </select>
+          )}
+        </Field>
+      </div>
+      <Field label="SBU" hint="Leave automatic unless this line belongs to a different practice than its technology suggests.">
+        {(p) => (
+          <select {...p} className="select" value={sbuId} onChange={(e) => setSbuId(e.target.value)}>
+            <option value="">Automatic, from the technology</option>
+            {boot.data?.sbus.map((sb) => <option key={sb.id} value={sb.id}>{sb.code} · {sb.name}</option>)}
+          </select>
+        )}
+      </Field>
+    </FormDialog>
+  );
+}
+
+/**
+ * Who else is bidding, and at what. The known price is hearsay by nature —
+ * a number the customer repeated, not one anybody verified — so it is optional
+ * and the notes are where the caveat goes.
+ */
+function AddCompetitor({ enq, onClose, onDone }: {
+  enq: EnquiryDetail; onClose: () => void; onDone: (msg: string) => void;
+}) {
+  const boot = useBootstrap();
+  const [competitor, setCompetitor] = useState('');
+  const [knownPrice, setKnownPrice] = useState('');
+  const [currency, setCurrency] = useState(enq.budget_currency ?? 'AED');
+  const [notes, setNotes] = useState('');
+
+  return (
+    <FormDialog
+      title={`Competitor on ${enq.enquiry_no}`}
+      submitLabel="Add competitor"
+      onClose={onClose}
+      disabled={!competitor.trim()}
+      onSubmit={async () => {
+        await api.post(`/enquiries/${enq.id}/competitors`, {
+          competitor: competitor.trim(),
+          knownPrice: knownPrice ? Number(knownPrice) : null,
+          currency: knownPrice ? currency : null,
+          notes: notes.trim() || null,
+        });
+        onDone(`${competitor.trim()} added.`);
+      }}
+    >
+      <Field label="Competitor" required>
+        {(p) => <input {...p} className="input" value={competitor} onChange={(e) => setCompetitor(e.target.value)} maxLength={255} autoFocus />}
+      </Field>
+      <div className="form-grid">
+        <Field label="Known price" hint="Only if you have been told a figure. Leave blank rather than guessing.">
+          {(p) => <input {...p} className="input" type="number" min={0} step={100} value={knownPrice} onChange={(e) => setKnownPrice(e.target.value)} />}
+        </Field>
+        <Field label="Currency">
+          {(p) => (
+            <select {...p} className="select" value={currency} onChange={(e) => setCurrency(e.target.value)} disabled={!knownPrice}>
+              {(boot.data?.currencies ?? [{ code: 'AED', name: 'UAE Dirham' }]).map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}
+            </select>
+          )}
+        </Field>
+      </div>
+      <Field label="Notes" hint="Where the figure came from, what they are leading with, anything the estimator should know.">
+        {(p) => <textarea {...p} className="textarea" value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={10000} />}
+      </Field>
+    </FormDialog>
+  );
+}
+
 function LogFollowUp({ enq, onClose, onDone }: { enq: EnquiryDetail; onClose: () => void; onDone: () => void }) {
   const [remarks, setRemarks] = useState('');
   const [next, setNext] = useState('');
@@ -178,6 +303,7 @@ export default function Enquiry360() {
   const canRaiseEst = useCan('technical_estimations.create');
   const canQuote = useCan('quotations.create');
   const [dlg, setDlg] = useState<Dlg>(null);
+  const [removing, setRemoving] = useState<EnquiryLine | null>(null);
   const [blocked, setBlocked] = useState<string | null>(null);
   const [building, setBuilding] = useState(false);
 
@@ -274,23 +400,52 @@ export default function Enquiry360() {
                   </dl>
                 </Panel>
 
-                <Panel title="Lines" count={e.lines.length} flush id="lines">
-                  <div className="table-wrap">
-                    <table className="t">
-                      <thead><tr><th className="num">#</th><th>Description</th><th>Technology</th><th>SBU</th><th className="num">Qty</th></tr></thead>
-                      <tbody>
-                        {e.lines.map((l) => (
-                          <tr key={l.id}>
-                            <td className="num">{l.line_no}</td>
-                            <td className="wrap">{l.description}</td>
-                            <td>{l.technology_name ?? <span className="muted">None</span>}{l.technology_category ? <span className="sub">{l.technology_category}</span> : null}</td>
-                            <td>{l.sbu_code ? <Chip mono>{l.sbu_code}</Chip> : null}</td>
-                            <td className="num">{fmtDec(l.quantity, 0)}</td>
+                <Panel
+                  title="Lines"
+                  count={e.lines.length}
+                  flush
+                  id="lines"
+                  actions={canEdit ? (
+                    <button type="button" className="btn btn--sm" onClick={() => setDlg({ kind: 'line', line: null })}>
+                      <PlusIcon /> Add line
+                    </button>
+                  ) : null}
+                >
+                  {e.lines.length === 0 ? (
+                    <EmptyState
+                      title="No lines yet"
+                      hint="Lines are what procurement sources and the estimator sizes. An enquiry can be saved without them, but nothing downstream can start."
+                      action={canEdit ? <button type="button" className="btn btn--primary" onClick={() => setDlg({ kind: 'line', line: null })}><PlusIcon /> Add line</button> : undefined}
+                    />
+                  ) : (
+                    <div className="table-wrap">
+                      <table className="t">
+                        <thead>
+                          <tr>
+                            <th className="num">#</th><th>Description</th><th>Technology</th><th>SBU</th><th className="num">Qty</th>
+                            {canEdit ? <th aria-label="Actions" /> : null}
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                        </thead>
+                        <tbody>
+                          {e.lines.map((l) => (
+                            <tr key={l.id}>
+                              <td className="num">{l.line_no}</td>
+                              <td className="wrap">{l.description}</td>
+                              <td>{l.technology_name ?? <span className="muted">None</span>}{l.technology_category ? <span className="sub">{l.technology_category}</span> : null}</td>
+                              <td>{l.sbu_code ? <Chip mono>{l.sbu_code}</Chip> : null}</td>
+                              <td className="num">{fmtDec(l.quantity, 0)}</td>
+                              {canEdit ? (
+                                <td className="nowrap">
+                                  <button type="button" className="btn btn--sm btn--ghost" onClick={() => setDlg({ kind: 'line', line: l })}>Edit</button>
+                                  <button type="button" className="btn btn--sm btn--ghost" onClick={() => setRemoving(l)}>Remove</button>
+                                </td>
+                              ) : null}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </Panel>
 
                 {e.procurement_requests ? (
@@ -439,18 +594,35 @@ export default function Enquiry360() {
                   )}
                 </Panel>
 
-                {e.competitors.length > 0 ? (
-                  <Panel title="Competitors" count={e.competitors.length} flush id="comp">
-                    <div className="table-wrap">
-                      <table className="t">
-                        <thead><tr><th>Competitor</th><th className="num">Known price</th></tr></thead>
-                        <tbody>
-                          {e.competitors.map((c) => (
-                            <tr key={c.id}><td>{c.competitor}{c.notes ? <span className="sub">{c.notes}</span> : null}</td><td className="num">{isNum(c.known_price) ? fmtMoney(c.known_price, c.currency, true) : null}</td></tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                {/* Rendered whenever you can edit, even with none recorded: the
+                    panel only appearing once a competitor exists is how an
+                    enquiry ends up with no way to add the first one. */}
+                {e.competitors.length > 0 || canEdit ? (
+                  <Panel
+                    title="Competitors"
+                    count={e.competitors.length}
+                    flush
+                    id="comp"
+                    actions={canEdit ? (
+                      <button type="button" className="btn btn--sm" onClick={() => setDlg('competitor')}>
+                        <PlusIcon /> Add
+                      </button>
+                    ) : null}
+                  >
+                    {e.competitors.length === 0 ? (
+                      <EmptyState title="Nobody recorded yet" hint="Who else is bidding, and anything you have heard about their number." />
+                    ) : (
+                      <div className="table-wrap">
+                        <table className="t">
+                          <thead><tr><th>Competitor</th><th className="num">Known price</th></tr></thead>
+                          <tbody>
+                            {e.competitors.map((c) => (
+                              <tr key={c.id}><td className="wrap">{c.competitor}{c.notes ? <span className="sub">{c.notes}</span> : null}</td><td className="num">{isNum(c.known_price) ? fmtMoney(c.known_price, c.currency, true) : <span className="muted">not known</span>}</td></tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </Panel>
                 ) : null}
               </div>
@@ -460,6 +632,30 @@ export default function Enquiry360() {
             {dlg === 'est' ? <RaiseEstimation enq={e} onClose={() => setDlg(null)} onDone={() => { toast.push('ok', 'Estimation request raised. Its SLA clock has started.'); done(); }} /> : null}
             {dlg === 'follow' ? <LogFollowUp enq={e} onClose={() => setDlg(null)} onDone={() => { toast.push('ok', 'Follow-up saved.'); done(); }} /> : null}
             {dlg === 'stage' ? <StageDialog enquiry={e} onClose={() => setDlg(null)} onChanged={() => { toast.push('ok', 'Stage changed.'); void reload(); }} /> : null}
+            {dlg === 'competitor' ? <AddCompetitor enq={e} onClose={() => setDlg(null)} onDone={(m) => { toast.push('ok', m); done(); }} /> : null}
+            {typeof dlg === 'object' && dlg?.kind === 'line'
+              ? <LineForm enq={e} line={dlg.line} onClose={() => setDlg(null)} onDone={(m) => { toast.push('ok', m); done(); }} />
+              : null}
+            {removing ? (
+              <FormDialog
+                title={`Remove line ${removing.line_no}?`}
+                submitLabel="Remove line"
+                danger
+                onClose={() => setRemoving(null)}
+                onSubmit={async () => {
+                  await api.del(`/enquiry-lines/${removing.id}`);
+                  setRemoving(null);
+                  toast.push('ok', `Line ${removing.line_no} removed.`);
+                  done();
+                }}
+              >
+                <p className="prewrap">{removing.description}</p>
+                <p className="sub">
+                  The remaining lines are renumbered. Anything already raised from this line —
+                  a procurement request or an estimate — keeps its own copy and is not touched.
+                </p>
+              </FormDialog>
+            ) : null}
             {blocked ? <MessageDialog title="That could not be done" message={blocked} onClose={() => setBlocked(null)} /> : null}
           </>
         );

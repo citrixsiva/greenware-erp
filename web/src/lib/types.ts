@@ -26,8 +26,28 @@ export interface Technology {
   sbu_id: string | null; sbu_code: string | null; sbu_name: string | null;
 }
 
+export interface TechnologyCategory {
+  id: string; name: string; sbu_id: string | null; sbu_code: string | null; sort_order: number | null;
+}
+
+export interface EnquiryLine {
+  id: string;
+  line_no: number;
+  technology_id: string | null;
+  technology_name: string | null;
+  technology_category: string | null;
+  product_sku_id: string | null;
+  service_id: string | null;
+  description: string;
+  quantity: number;
+  sbu_id: string | null;
+  sbu_code: string | null;
+  sbu_name: string | null;
+}
+
 export interface Bootstrap {
   sbus: Sbu[];
+  technology_categories: TechnologyCategory[];
   technologies: Technology[];
   business_types: BusinessType[];
   tax_codes: TaxCode[];
@@ -264,10 +284,7 @@ export interface EnquiryDetail extends EnquiryRow {
   contact_email: string | null;
   contact_phone: string | null;
   created_at: string;
-  lines: {
-    id: string; line_no: number; technology_name: string | null; technology_category: string | null;
-    description: string; quantity: number; sbu_code: string | null;
-  }[];
+  lines: EnquiryLine[];
   stage_history: { id: string; from_stage: string | null; to_stage: string; changed_at: string; changed_by_name: string | null; remarks: string | null }[];
   follow_ups: {
     id: string; followed_up_at: string; next_follow_up: string | null; channel: string | null;
