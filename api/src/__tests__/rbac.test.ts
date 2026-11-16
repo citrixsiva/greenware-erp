@@ -23,6 +23,7 @@ import * as H from './helpers.js';
 
 const DIRECTOR_EMAIL = 'rbactest.director@greenware.test';
 const ADMIN_EMAIL = 'rbactest.admin@greenware.test';
+const MARKETING_EMAIL = 'rbactest.marketing@greenware.test';
 
 /** The seed ships no DIRECTOR or ADMIN holder; those two are created in `before`. */
 const HOLDER: Record<RoleCode, string> = {
@@ -36,6 +37,12 @@ const HOLDER: Record<RoleCode, string> = {
   PM: 'aishwarya@greenware.ae',
   ACCOUNTS: 'sangeetha@greenware.ae',
   ADMIN: ADMIN_EMAIL,
+  // Deal Desk. Rock holds MARKETING in production, but he holds PM as well and
+  // a user's permissions are the UNION of their roles — so asserting the
+  // MARKETING row against him would really be asserting PM+MARKETING, and the
+  // denies would be meaningless. Like DIRECTOR and ADMIN, this row needs a
+  // single-role holder, created in `before`.
+  MARKETING: MARKETING_EMAIL,
 };
 
 const OTHER_SALES = 'abi@greenware.ae';
@@ -81,6 +88,7 @@ let fx: Fixture;
 before(async () => {
   await H.ensureRoleUser('DIRECTOR', DIRECTOR_EMAIL, 'RBAC Test Director');
   await H.ensureRoleUser('ADMIN', ADMIN_EMAIL, 'RBAC Test Admin');
+  await H.ensureRoleUser('MARKETING', MARKETING_EMAIL, 'RBAC Test Marketing');
   const m = await H.masters();
 
   // No live field grant may be in force, or the masking expectations below are moot.

@@ -1013,7 +1013,7 @@ export async function salesRoutes(app: FastifyInstance) {
 
   app.get('/api/v1/leads', async (req) => {
     const ctx = req.auth;
-    const scope = require_(ctx, 'enquiries.view');
+    const scope = require_(ctx, 'leads.view');
     const qs = parse(leadListQuery, req.query);
     const sc = scopeSql(ctx, scope, { alias: 'l', ownerCol: 'owner_id', sbuCol: 'sbu_id', entity: 'leads' }, 1);
     const params: any[] = [...sc.params];
@@ -1045,7 +1045,7 @@ export async function salesRoutes(app: FastifyInstance) {
 
   app.post('/api/v1/leads', async (req, reply) => {
     const ctx = req.auth;
-    const scope = require_(ctx, 'enquiries.create');
+    const scope = require_(ctx, 'leads.create');
     const b = parse(createLeadBody, req.body);
     const ownerId = b.ownerId ?? ctx.employeeId ?? null;
     if (scope === 'O' && ownerId !== ctx.employeeId)
@@ -1081,10 +1081,19 @@ export async function salesRoutes(app: FastifyInstance) {
     return { data: row };
   });
 
-  /** THE HANDOFF: marketing lead -> sales enquiry, atomically. */
+  /**
+   * THE HANDOFF: marketing lead -> sales enquiry, atomically.
+   *
+   * Guarded by `leads.edit`, not `enquiries.create`. Qualifying IS the act of
+   * handing a lead to sales, so a marketer who may work the lead may complete
+   * the handoff; requiring the sales permission as well would mean marketing
+   * could never finish the one job the Deal Desk exists for. The enquiry is
+   * created with an explicit account manager and a full audit row, so the
+   * sales side still owns it from the moment it lands.
+   */
   app.post('/api/v1/leads/:id/qualify', async (req, reply) => {
     const ctx = req.auth;
-    const scope = require_(ctx, 'enquiries.create');
+    const scope = require_(ctx, 'leads.edit');
     const { id } = parse(idParam, req.params);
     const b = parse(qualifyBody, req.body);
 
@@ -1179,7 +1188,7 @@ export async function salesRoutes(app: FastifyInstance) {
 
   app.post('/api/v1/leads/:id/disqualify', async (req) => {
     const ctx = req.auth;
-    const scope = require_(ctx, 'enquiries.edit');
+    const scope = require_(ctx, 'leads.edit');
     const { id } = parse(idParam, req.params);
     const b = parse(disqualifyBody, req.body);
     const row = await guard(() => tx(txCtx(ctx, scope), async (c) => {
@@ -1205,7 +1214,7 @@ export async function salesRoutes(app: FastifyInstance) {
   /* ═════════════ Campaigns ═════════════ */
 
   app.get('/api/v1/campaigns', async (req) => {
-    require_(req.auth, 'enquiries.view');
+    require_(req.auth, 'campaigns.view');
     const qs = parse(campaignQuery, req.query);
     const params: any[] = [];
     const w: string[] = ['TRUE'];

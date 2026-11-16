@@ -15,6 +15,9 @@ const EstimationDetail = lazy(() => import('./pages/EstimationDetail'));
 const Quotations = lazy(() => import('./pages/Quotations'));
 const QuotationBuilder = lazy(() => import('./pages/QuotationBuilder'));
 const PriceHistory = lazy(() => import('./pages/PriceHistory'));
+const DealDesk = lazy(() => import('./pages/DealDesk'));
+const LeadDetail = lazy(() => import('./pages/LeadDetail'));
+const Campaigns = lazy(() => import('./pages/Campaigns'));
 const Approvals = lazy(() => import('./pages/Approvals'));
 const Admin = lazy(() => import('./pages/Admin'));
 
@@ -35,6 +38,7 @@ function Home() {
   const { user } = useAuth();
   const order: [string, string][] = [
     ['enquiries.view', '/pipeline'],
+    ['leads.view', '/deal-desk'],
     ['procurement_requests.view', '/procurement'],
     ['technical_estimations.view', '/estimation'],
     ['quotations.view', '/quotations'],
@@ -70,6 +74,9 @@ export default function App() {
           <Route path="quotations" element={<Gate perm="quotations.view"><Quotations /></Gate>} />
           <Route path="quotations/:id" element={<Gate perm="quotations.view"><QuotationBuilder /></Gate>} />
           <Route path="price-history" element={<Gate perm="price_history.view"><PriceHistory /></Gate>} />
+          <Route path="deal-desk" element={<Gate perm="leads.view"><DealDesk /></Gate>} />
+          <Route path="deal-desk/:id" element={<Gate perm="leads.view"><LeadDetail /></Gate>} />
+          <Route path="campaigns" element={<Gate perm="campaigns.view"><Campaigns /></Gate>} />
           <Route path="approvals" element={<Gate perm="quotations.approve"><Approvals /></Gate>} />
           <Route path="admin" element={<Gate perm="admin.view"><Admin /></Gate>} />
           <Route path="*" element={<EmptyState title="Page not found" hint="Use the navigation on the left." />} />

@@ -6,6 +6,7 @@ import { estimationRoutes } from './estimation.js';
 import { quotationRoutes } from './quotation.js';
 import { documentRoutes } from './documents.js';
 import { priceHistoryRoutes } from './price-history.js';
+import { dealDeskRoutes } from './dealdesk.js';
 import { adminRoutes } from './admin.js';
 
 export async function registerModules(app: FastifyInstance) {
@@ -16,5 +17,6 @@ export async function registerModules(app: FastifyInstance) {
   await app.register(quotationRoutes);
   await app.register(documentRoutes);
   await app.register(priceHistoryRoutes);
+  await app.register(dealDeskRoutes);
   await app.register(adminRoutes);
 }

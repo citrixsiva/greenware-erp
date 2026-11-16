@@ -37,6 +37,19 @@ const PEOPLE: Array<{ name: string; email: string; role: string; sbus?: Array<[s
   { name: 'Uthandeeshwar',     email: 'uthandeeshwar@greenware.ae', role: 'TECHNICAL', sbus: [['SBU4','Engineer']] },
 ];
 
+/**
+ * Roles held IN ADDITION to the one on the PEOPLE row above.
+ *
+ * A person is one row with one primary role, which covers almost everyone. The
+ * Deal Desk broke that: Rock runs marketing as well as delivery, and
+ * user_roles is many-to-many precisely so a person can do two jobs. Removing
+ * his existing role is an administrator's decision in Admin → Users, not a
+ * side effect of seeding, so this only adds.
+ */
+const EXTRA_ROLES: Record<string, string[]> = {
+  'rock@greenware.ae': ['MARKETING'],
+};
+
 // OD-17: internal timers keep the proposed defaults. The customer P1-P4 matrix
 // is service-side and is seeded by the schema against contracts.
 const SLA_RULES: Array<[string, 'Normal'|'Urgent', number]> = [
@@ -99,14 +112,21 @@ async function main() {
          ON CONFLICT (email) DO UPDATE SET display_name = EXCLUDED.display_name RETURNING id`,
         [p.email, p.name]);
       const userId = u.rows[0].id;
+      // DO NOTHING, not DO UPDATE. The seed has to stay re-runnable — it is how
+      // new permissions and roles reach an existing database — and an upsert
+      // here would silently reset every password to SEED_PASSWORD each time,
+      // undoing whatever people had changed theirs to. A user who already has
+      // a credential keeps it; only a new account gets the seed password.
       await c.query(
         `INSERT INTO gw.settings (key, value) VALUES ($1, $2::jsonb)
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+         ON CONFLICT (key) DO NOTHING`,
         [`auth.local.${userId}`, JSON.stringify({ hash: pw })]);
-      await c.query(
-        `INSERT INTO gw.user_roles (user_id, role_id, company_id)
-         SELECT $1, r.id, $3 FROM gw.roles r WHERE r.code = $2
-         ON CONFLICT (user_id, role_id) DO NOTHING`, [userId, p.role, companyId]);
+      for (const role of [p.role, ...(EXTRA_ROLES[p.email] ?? [])]) {
+        await c.query(
+          `INSERT INTO gw.user_roles (user_id, role_id, company_id)
+           SELECT $1, r.id, $3 FROM gw.roles r WHERE r.code = $2
+           ON CONFLICT (user_id, role_id) DO NOTHING`, [userId, role, companyId]);
+      }
 
       const primarySbu = p.sbus?.find(s => s[1] === 'Head')?.[0] ?? p.sbus?.[0]?.[0] ?? null;
       const e = await c.query(

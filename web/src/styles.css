@@ -469,3 +469,26 @@ td .input--cell.w-sm { min-width: 64px; max-width: 90px; }
   .btn, .input, .select { min-height: 36px; }
   .btn--sm { min-height: 30px; }
 }
+
+/* ---------- Deal Desk ---------- */
+
+/* Two readable columns on a desk-sized screen, stacked on a phone. */
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--s3); }
+
+/* Label/value pairs for a record's facts: a definition list, styled as a grid
+   so the values line up without a table's semantics. */
+.kv { display: grid; grid-template-columns: minmax(104px, auto) 1fr; gap: 6px var(--s3); margin: 0; align-items: baseline; }
+.kv dt { color: var(--ink-3); font-size: 12px; }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.kv dd .select { max-width: 240px; }
+
+.timeline__item { padding-bottom: 2px; }
+.timeline__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.timeline__head .sub { color: var(--ink-3); font-size: 11.5px; }
+.timeline__item p { margin: 4px 0 0; }
+.timeline { padding-block: var(--s3); padding-right: var(--s3); }
+
+@media (max-width: 560px) {
+  .kv { grid-template-columns: 1fr; gap: 2px; }
+  .kv dt { margin-top: 8px; }
+}

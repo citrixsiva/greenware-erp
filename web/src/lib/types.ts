@@ -408,3 +408,100 @@ export interface PriceItem {
     lost?: number;
   };
 }
+
+/* ───────────────────────── Deal Desk (cluster 15) ───────────────────────── */
+
+export type LeadStatus = 'New' | 'Working' | 'Nurturing' | 'Qualified' | 'Disqualified' | 'Recycled';
+export type ActivityKind = 'Call' | 'Email' | 'Meeting' | 'Note' | 'Task' | 'LinkedIn' | 'WhatsApp' | 'SiteVisit';
+
+export interface LeadRow {
+  id: string;
+  lead_no: string;
+  company_name: string;
+  customer_id: string | null;
+  contact_name: string | null;
+  designation: string | null;
+  email: string | null;
+  phone: string | null;
+  country: string | null;
+  source: string | null;
+  source_detail: string | null;
+  estimated_value: number | null;
+  currency: string | null;
+  score: number;
+  status: LeadStatus;
+  campaign_id: string | null;
+  campaign_code: string | null;
+  campaign_name: string | null;
+  technology_id: string | null;
+  technology_name: string | null;
+  sbu_id: string | null;
+  sbu_code: string | null;
+  owner_id: string | null;
+  owner_name: string | null;
+  age_days: number;
+  qualified_at: string | null;
+  qualified_enquiry_id: string | null;
+  qualified_enquiry_no?: string | null;
+  disqualify_reason: string | null;
+  consent_marketing: boolean;
+  consent_at?: string | null;
+  created_at: string;
+}
+
+export interface LeadActivity {
+  id: string;
+  kind: ActivityKind;
+  subject: string;
+  body: string | null;
+  outcome: string | null;
+  duration_mins: number | null;
+  occurred_at: string;
+  performed_by_name: string | null;
+}
+
+export interface LeadScoreEvent {
+  id: string;
+  points: number;
+  reason: string | null;
+  created_at: string;
+}
+
+export interface LeadDetail extends LeadRow {
+  activities: LeadActivity[];
+  score_events: LeadScoreEvent[];
+}
+
+export interface DealDeskSummary {
+  open_leads: number;
+  untouched: number;
+  qualified: number;
+  disqualified: number;
+  stale: number;
+  open_value: number | null;
+  avg_score: number | null;
+  conversion_pct: number | null;
+}
+
+export interface CampaignRow {
+  campaign_id: string;
+  campaign_code: string;
+  name: string;
+  channel: string;
+  spend: number | null;
+  leads: number;
+  qualified: number;
+  enquiries: number;
+  enquiry_value: number | null;
+  won_count: number;
+  won_value: number | null;
+  cost_per_qualified_lead: number | null;
+  return_multiple: number | null;
+  start_date: string | null;
+  end_date: string | null;
+  budget: number | null;
+  currency: string | null;
+  target_leads: number | null;
+  is_active: boolean;
+  owner_name: string | null;
+}

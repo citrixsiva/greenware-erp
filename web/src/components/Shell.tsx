@@ -19,6 +19,13 @@ const GROUPS: { label: string; items: NavItem[] }[] = [
     ],
   },
   {
+    label: 'Marketing',
+    items: [
+      { to: '/deal-desk', label: 'Deal Desk', icon: 'pipeline', perm: 'leads.view' },
+      { to: '/campaigns', label: 'Campaigns', icon: 'price', perm: 'campaigns.view' },
+    ],
+  },
+  {
     label: 'Sourcing',
     items: [
       { to: '/procurement', label: 'Procurement', icon: 'procurement', perm: 'procurement_requests.view' },

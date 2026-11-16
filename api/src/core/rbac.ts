@@ -24,6 +24,11 @@ export const ROLE_FIELDS: Record<string, { all: FieldGroup[]; own: FieldGroup[] 
   PM:          { all: [], own: [] },
   ACCOUNTS:    { all: ['supplier_cost','sell_price','margin','day_rate','service_cost','supplier_terms','credit'], own: [] },
   ADMIN:       { all: [], own: [] },
+  // Marketing works leads and campaigns. It never sees supplier cost, sell
+  // price, margin or credit — a campaign's return is read from
+  // v_campaign_attribution, which aggregates won value without exposing any
+  // single deal's commercials.
+  MARKETING:   { all: [], own: [] },
 };
 
 /** Which field group each maskable column belongs to, by table. */
