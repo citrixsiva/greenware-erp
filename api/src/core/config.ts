@@ -45,6 +45,21 @@ export const config = {
   port: Number(process.env.PORT ?? 8080),
   host: process.env.HOST ?? '0.0.0.0',
   databaseUrl: requiredUrl('DATABASE_URL', 'postgres://postgres@127.0.0.1:5432/greenware'),
+  /**
+   * DigitalOcean Managed Postgres presents a certificate signed by a per-cluster
+   * CA that is in no public trust store, so `sslmode=require` in the URL alone
+   * either fails verification or (worse) silently stops verifying. Bind
+   * DATABASE_CA_CERT to ${db.CA_CERT} in the app spec and the pool verifies
+   * properly. Unset — local Postgres, docker-compose — SSL is left off.
+   */
+  databaseCaCert: process.env.DATABASE_CA_CERT ?? '',
+  /**
+   * Must stay under the cluster's connection limit, which is 22 on the
+   * smallest DigitalOcean plan and is shared with the migration job, the
+   * console and any second container. 20 was one careless scale-up away from
+   * exhausting it.
+   */
+  databasePoolMax: Number(process.env.DATABASE_POOL_MAX ?? 8),
   jwtSecret: requiredSecret('JWT_SECRET'),
   jwtTtl: process.env.JWT_TTL ?? '8h',
   companyCode: process.env.COMPANY_CODE ?? 'GWT',

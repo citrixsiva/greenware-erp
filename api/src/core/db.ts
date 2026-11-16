@@ -7,7 +7,15 @@ pg.types.setTypeParser(20, (v) => (v === null ? null : Number(v)));
 
 export const pool = new pg.Pool({
   connectionString: config.databaseUrl,
-  max: 20,
+  // Verify the server certificate against the cluster's own CA when one is
+  // supplied. Without this, `sslmode=require` against DigitalOcean Managed
+  // Postgres fails on an unknown issuer, and the usual "fix" of
+  // rejectUnauthorized:false encrypts the connection while authenticating
+  // nothing — which is the half that matters on a shared network.
+  ...(config.databaseCaCert
+    ? { ssl: { ca: config.databaseCaCert, rejectUnauthorized: true } }
+    : {}),
+  max: config.databasePoolMax,
   idleTimeoutMillis: 30_000,
 });
 
